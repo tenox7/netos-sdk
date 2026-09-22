@@ -1,0 +1,12 @@
+#!/bin/sh
+# nsdk - run a toolchain command against the current directory.
+#
+#   ./nsdk netos-gcc hello.c -o hello     compile
+#   ./nsdk sh                             shell inside the SDK
+#
+# Set NETOS_IMAGE to use a different image tag.
+[ $# -gt 0 ] || set -- sh
+tty=
+[ -t 0 ] && tty=-t
+exec docker run --rm -i $tty --platform linux/386 \
+	-v "$PWD:/w" -w /w "${NETOS_IMAGE:-netos-i960}" "$@"

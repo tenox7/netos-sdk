@@ -1,0 +1,12 @@
+# build products
+examples/demo
+examples/heaptest
+examples/systest
+examples/floattest
+examples/floatfmt
+examples/aclock
+examples/hello
+*.o
+*.rel
+*.a
+*.log

@@ -1,0 +1,36 @@
+#!/bin/sh
+# netos-gcc - compile C straight to a netOS i960 b.out image.
+#   netos-gcc [gcc flags] file.c [file.c ...] -o prog
+set -e
+P=/opt/i960
+T=i960-intel-nindy
+out=a.out
+srcs=
+flags=
+
+while [ $# -gt 0 ]; do
+	case "$1" in
+	-o) out=$2; shift 2 ;;
+	*.c) srcs="$srcs $1"; shift ;;
+	*.s|*.S) srcs="$srcs $1"; shift ;;
+	*) flags="$flags $1"; shift ;;
+	esac
+done
+[ -n "$srcs" ] || { echo "netos-gcc: no input files" >&2; exit 1; }
+
+tmp=$(mktemp -d)
+trap 'rm -rf $tmp' EXIT
+objs=
+
+for s in $srcs; do
+	b=$tmp/$(basename "$s" | sed 's/\.[csS]$//')
+	case "$s" in
+	*.c) $T-gcc -O2 -fno-common -I $P/netos/include $flags -S -o $b.s "$s"
+	     $T-as -o $b.o $b.s ;;
+	*)   $T-as -o $b.o "$s" ;;
+	esac
+	objs="$objs $b.o"
+done
+
+$T-ld -r -o $tmp/link.rel $P/netos/lib/crt0.o $objs $P/netos/lib/libnetos.a $P/netos/lib/libgcc.a
+mkbout $tmp/link.rel "$out" _start
