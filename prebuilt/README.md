@@ -15,5 +15,6 @@ run the name:
 | `floattest` | soft float and `long long` arithmetic |
 | `floatfmt` | `%f` and `%e` formatting |
 | `aclock` | [aclock](https://github.com/tenox7/aclock), built from unmodified source |
+| `nettest` | TCP/UDP echo server on port 7777, or a client given `host port [text]` |
 
 Rebuild any of them with `make examples`.

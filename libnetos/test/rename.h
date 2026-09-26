@@ -61,3 +61,12 @@
 #define stdout np_stdout
 #define stderr np_stderr
 #define main np_main
+#define strerror np_strerror
+#define recv np_recv
+#define send np_send
+#define gethostbyname np_gethostbyname
+#define gethostbyaddr np_gethostbyaddr
+#define inet_aton np_inet_aton
+#define inet_addr np_inet_addr
+#define inet_ntoa np_inet_ntoa
+#define h_errno np_h_errno

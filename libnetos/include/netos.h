@@ -31,21 +31,25 @@ void *netos_fopen(const char *path, const char *mode);		/* 10/0x17 */
 int   netos_fprintf(void *stream, const char *fmt, ...);	/* 10/0x18 */
 void  netos_free(void *p);					/* 10/0x1c */
 char *netos_getenv(const char *name);				/* 10/0x20 */
-int   netos_strlen(const char *s);				/* 10/0x2a */
+void *netos_malloc(unsigned long n);				/* 10/0x2a */
 int   netos_printf(const char *fmt, ...);			/* 10/0x36 */
 int   netos_sprintf(char *buf, const char *fmt, ...);		/* 10/0x49 */
 int   netos_sscanf(const char *s, const char *fmt, ...);	/* 10/0x4c */
-char *netos_strcpy(char *dst, const char *src);			/* 10/0x4e */
+char *netos_strcat(char *dst, const char *src);			/* 10/0x4e */
+char *netos_strchr(const char *s, int c);			/* 10/0x4f */
 int   netos_strcmp(const char *a, const char *b);		/* 10/0x50 */
+char *netos_strcpy(char *dst, const char *src);			/* 10/0x51 */
+int   netos_strlen(const char *s);				/* 10/0x54 */
 int   netos_strncmp(const char *a, const char *b, int n);	/* 10/0x57 */
-void *netos_malloc(unsigned long n);				/* 10/0x67 */
 long  netos_time(long *tp);					/* 10/0x85 */
 void  netos_qsort(void *base, unsigned long n, unsigned long sz, int (*cmp)());	/* 10/0x3a */
 int   netos_fputc(int c, void *stream);				/* 10/0x76 */
 char *netos_asctime(const void *tm);	/* 10/0x8b - malloc'd, 26 bytes */
 char *netos_ctime(const long *tp);	/* 10/0x8c - malloc'd, 26 bytes */
 void *netos_gmtime(const long *tp);	/* 10/0x8d - malloc'd struct tm */
-char *netos_strchr(const char *s, int c);			/* 10/0x8f */
 void *netos_localtime(const long *tp);	/* 10/0x8e - returns malloc'd tm */
+char *netos_strrchr(const char *s, int c);			/* 10/0x8f */
+void *netos_gethostbyname(const char *name);	/* 10/0x7c - malloc'd hostent */
+void *netos_gethostbyaddr(const void *a, int len, int type);	/* 10/0x7d - malloc'd */
 
 #endif

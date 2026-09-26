@@ -3,6 +3,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <errno.h>
 
 static FILE _stdin  = { 0, _F_READ,  0, { 0 } };
 static FILE _stdout = { 1, _F_WRITE | _F_LINEBUF, 0, { 0 } };
@@ -142,5 +143,6 @@ int fclose(FILE *f)
 void perror(const char *s)
 {
 	if (s && *s) { fputs(s, stderr); fputs(": ", stderr); }
-	fputs("error\n", stderr);
+	fputs(strerror(errno), stderr);
+	fputc('\n', stderr);
 }

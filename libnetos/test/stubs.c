@@ -7,6 +7,8 @@
 #include <fcntl.h>
 #include <time.h>
 #include <sys/select.h>
+#include <errno.h>
+#include <netdb.h>
 #include <string.h>
 
 struct ntm {
@@ -16,6 +18,8 @@ struct ntm {
 	char *tm_zone;
 };
 struct ntv { long tv_sec, tv_usec; };
+
+int *__netos_errno;
 
 int  netos_open(const char *p, int f, int m) { return open(p, f, m); }
 int  netos_close(int fd)                     { return close(fd); }
@@ -27,10 +31,9 @@ void netos_free(void *p)                     { free(p); }
 
 int netos_select(int n, void *r, void *w, void *e, struct ntv *t)
 {
-	struct timeval tv;
-	if (!t) return 0;
-	tv.tv_sec = t->tv_sec; tv.tv_usec = t->tv_usec;
-	return select(n, 0, 0, 0, &tv);
+	struct timeval tv, *tp = 0;
+	if (t) { tv.tv_sec = t->tv_sec; tv.tv_usec = t->tv_usec; tp = &tv; }
+	return select(n, r, w, e, tp);
 }
 
 long netos_time(long *p) { time_t t = time(0); if (p) *p = t; return (long) t; }
@@ -53,6 +56,7 @@ extern void __netos_setargs(char **, char **);
 
 int main(int argc, char **argv, char **envp)
 {
+	__netos_errno = &errno;
 	__netos_setargs(argv, envp);
 	return np_main(argc, argv);
 }
@@ -85,3 +89,26 @@ char *netos_asctime(const void *tm)
 	(void) tm;
 	return p;
 }
+
+/* netOS returns malloc'd hostents; mimic that with a single block */
+static void *hostcopy(struct hostent *h)
+{
+	struct hostent *c;
+	char **list;
+
+	if (!h) return 0;
+	c = malloc(sizeof *c + 2 * sizeof(char *) + 4 + strlen(h->h_name) + 1);
+	list = (char **) (c + 1);
+	*c = *h;
+	list[0] = (char *) (list + 2);
+	list[1] = 0;
+	memcpy(list[0], h->h_addr_list[0], 4);
+	c->h_name = list[0] + 4;
+	strcpy(c->h_name, h->h_name);
+	c->h_aliases = list + 1;
+	c->h_addr_list = list;
+	return c;
+}
+
+void *netos_gethostbyname(const char *n)             { return hostcopy(gethostbyname(n)); }
+void *netos_gethostbyaddr(const void *a, int l, int t) { return hostcopy(gethostbyaddr(a, l, t)); }

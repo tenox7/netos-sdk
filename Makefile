@@ -1,5 +1,5 @@
 IMAGE   ?= netos-i960
-EXAMPLES = demo heaptest systest floattest floatfmt
+EXAMPLES = demo heaptest systest floattest floatfmt nettest
 RUN      = docker run --rm --platform linux/386 -v "$(CURDIR):/w" -w /w $(IMAGE)
 
 .PHONY: image examples test clean
@@ -18,8 +18,9 @@ examples: image
 test:
 	docker run --rm -v "$(CURDIR):/s" -w /s/libnetos debian:bookworm-slim sh -c \
 	  'apt-get update -qq >/dev/null && apt-get install -y -qq --no-install-recommends gcc libc6-dev >/dev/null; \
-	   sh test/run.sh'
+	   sh test/run.sh && sh test/net.sh'
 
 clean:
 	rm -f examples/demo examples/heaptest examples/systest examples/floattest \
-	      examples/floatfmt examples/aclock examples/hello examples/*.o examples/*.rel
+	      examples/floatfmt examples/nettest examples/aclock examples/hello \
+	      examples/*.o examples/*.rel

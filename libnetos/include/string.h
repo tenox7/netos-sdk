@@ -18,4 +18,5 @@ void *memmove(void *, const void *, size_t);
 int memcmp(const void *, const void *, size_t);
 void bcopy(const void *, void *, size_t);
 void bzero(void *, size_t);
+char *strerror(int);
 #endif
