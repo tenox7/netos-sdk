@@ -93,3 +93,7 @@ char *asctime(const struct tm *tm)
 	static char ab[26];
 	return keep(netos_asctime(tm), ab, sizeof ab);
 }
+
+/* raw exit: no stdio flush, safe in a vforked child before execv */
+extern void netos_exit(int);
+void _exit(int code) { netos_exit(code); for (;;) ; }

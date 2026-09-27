@@ -5,6 +5,7 @@ examples/systest
 examples/floattest
 examples/floatfmt
 examples/nettest
+examples/rshd
 examples/aclock
 examples/hello
 *.o

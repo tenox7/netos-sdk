@@ -44,6 +44,11 @@ BSD sockets work through `sys/socket.h`, `netinet/in.h`, `arpa/inet.h`,
 `netdb.h` and `errno.h`, mapped straight onto the kernel's socket calls.
 `examples/nettest.c` is a TCP/UDP echo server, or a client given a host.
 
+Process control is `vfork`, `execv`/`execl`, `dup2`, `pipe`, `wait` and
+`kill` (`unistd.h`, `signal.h`, `sys/wait.h`). netOS has no `fork`, only
+`vfork`, so a child may only rearrange fds and `execv`/`_exit`.
+`examples/rshd.c` is a BSD remote-shell daemon built on all of it.
+
 Floating point goes through libgcc soft float — the i960 core has no FPU, and
 the i960 gcc configuration never built `fp-bit.c`, so the SDK builds it. `%f`
 and `%e` work, `%g` maps to `%f`, and the integer part must fit in a long.
@@ -120,6 +125,9 @@ the same group/index pairs, encoded as `sc` with `(group<<16)|index` in `r0`.
 | 7/0x07 | getpeername | perror `getpeername` in vidconf |
 | 7/0x09 | ioctl | FIONBIO and audio ioctl messages; 259 sites |
 | 7/0x0b | listen | `listen(s, 5)`, perror `listen` in rfloppyd |
+| 7/0x04 | dup | one fd arg in netscape |
+| 7/0x05 | dup2 | `dup2(fd, 2)` in netscape |
+| 7/0x0a | kill | `kill(pid, 15)` in netscape's shutdown path |
 | 7/0x0d | open | third argument is `0666`; args are `/dev/audio` etc |
 | 7/0x0e | read | elimination within `_dd` |
 | 7/0x0f | readv | Xlib `_XReadPad`: `(fd, iov, 2)` |
@@ -128,11 +136,17 @@ the same group/index pairs, encoded as `sc` with `(group<<16)|index` in `r0`.
 | 7/0x13 | setsockopt | `(s, 0xffff, 4, &on, 4)`, perror `setsockopt` |
 | 7/0x16 | socket | `(2, 1, 0)`, perror `socket` |
 | 7/0x17 | socketpair | `(1, 1, 0, sv)` in multiNC |
+| 7/0x18 | wait | one status-ptr arg, returns the pid |
 | 7/0x19 | write | return compared against the requested count |
 | 7/0x1a | writev | Xlib `_XSend` |
+| 7/0x1b | pipe | `pipe(&fds[2])` in tar, netscape, gview |
+| 7/0x1d | execv | `execv(path, argv)` then "olvwm: exec" error |
+| 7/0x1e | vfork | the shipped apps' error string says "Vfork" |
+| 7/0x22 | chdir | `_du` "cannot change to directory %s" |
 | 7/0x23 | stat | `(path, statbuf)`, paired with 0x24 in `_ls` |
 | 7/0x24 | lstat | same shape as 0x23, adjacent branch |
 | 7/0x29 | lseek | offset computed as `a*b`, whence 0 |
+| 7/0x26 | getpid | no args, result stored as a pid |
 | 7/0x2c | select | 5 args ending in a timeval; xscreensaver's delay idiom |
 | 7/0x2f | getsockname | perror `getsockname` in rexec |
 | 7/0x45 | readlink | `(path, stackbuf, 256)` in `_ls` |
@@ -178,12 +192,10 @@ so each identified entry pins down its neighbours. `errno` lives at the address
 table at 0x302cbf50. Sockets are 4.3BSD: 16-bit `sa_family` and no `sa_len`,
 BSD `SOL_SOCKET`/`SO_*` values, ioctls numbered `('f'<<8)|n`.
 
-Also identified, not wrapped yet: 7/0x04 dup, 7/0x05 dup2, 7/0x0a kill,
-7/0x14 sigblock, 7/0x15 sigsetmask, 7/0x18 wait, 7/0x1b pipe, 7/0x1e vfork,
-7/0x21 fcntl, 7/0x22 chdir, 7/0x25 fstat, 7/0x26 getpid, 7/0x28 unlink,
-10/0x2f memset, 10/0x34 perror, 10/0x48 sleep, 10/0x55 strncasecmp,
-10/0x5e syslog, 10/0x66 opendir, 10/0x6b closedir; 13/0x05 returns the `FILE`
-for fd 0, 1 or 2.
+Also identified, not wrapped yet: 7/0x14 sigblock, 7/0x15 sigsetmask,
+7/0x21 fcntl, 7/0x25 fstat, 7/0x28 unlink, 10/0x2f memset, 10/0x34 perror,
+10/0x48 sleep, 10/0x55 strncasecmp, 10/0x5e syslog, 10/0x66 opendir,
+10/0x6b closedir; 13/0x05 returns the `FILE` for fd 0, 1 or 2.
 
 Probable but unverified: `10/0x2d` memcpy. `stat`/`lstat` are certainly that
 pair, but which index is which is a guess — they appear in adjacent branches of
@@ -222,7 +234,8 @@ Built and run on real hardware. Not exhaustively tested.
   system call map above transfers unchanged.
 * No X11. Group 9 is Xlib and completely unmapped apart from `XOpenDisplay`.
 * `%f` handles values whose integer part fits in a long; larger prints `huge`.
-* No `opendir`/`readdir`, no `signal`, no `getsockopt` or `gethostname`.
+* No `opendir`/`readdir`, no `signal` handlers (only `kill`), no `getsockopt`
+  or `gethostname`. Only `vfork`, so no post-`fork` code before `execv`.
 
 ## License
 

@@ -100,6 +100,17 @@ ___main:				# gcc emits this for main(); libgcc would supply it
 	SYS	_netos_gethostbyname, 10, 0x7c
 	SYS	_netos_gethostbyaddr, 10, 0x7d
 
+# process control, used directly
+	SYS	_dup, 7, 0x04
+	SYS	_dup2, 7, 0x05
+	SYS	_kill, 7, 0x0a
+	SYS	_wait, 7, 0x18
+	SYS	_pipe, 7, 0x1b
+	SYS	_execv, 7, 0x1d
+	SYS	_vfork, 7, 0x1e
+	SYS	_getpid, 7, 0x26
+	SYS	_chdir, 7, 0x22
+
 # netOS enters here with g0=argc g1=argv g2=envp
 	.globl	_start
 _start:
