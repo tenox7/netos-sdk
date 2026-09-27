@@ -32,6 +32,11 @@ install -d $D/include
 for h in stdarg.h varargs.h stddef.h va-i960.h iso646.h; do
 	install -m644 ../gcc-$V/gcc/ginclude/$h $D/include/
 done
+# limits.h chains to the C library's, as a native install does; float.h is
+# written by hand, as gcc can only generate it by running on the target
+cat ../gcc-$V/gcc/limitx.h ../gcc-$V/gcc/glimits.h ../gcc-$V/gcc/limity.h > $D/include/limits.h
+install -m644 ../gcc-$V/gcc/gsyslimits.h $D/include/syslimits.h
+install -m644 /build/float.h $D/include/float.h
 
 # libgcc: 64-bit integer helpers, plus fp-bit.c for soft float.  Neither needs
 # a target libc with -Dinhibit_libc, and libgcc1.null stands in for the

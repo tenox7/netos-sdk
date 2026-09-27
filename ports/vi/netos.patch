@@ -1,0 +1,125 @@
+diff -ruN ./ex_data.c ../../b/ex-050325/ex_data.c
+--- a/ex_data.c	2004-11-26 17:19:35.000000000 -0800
++++ b/ex_data.c	2026-09-26 19:51:25.623448440 -0700
+@@ -90,7 +90,10 @@
+  * These initializations are done char by char instead of as strings
+  * to confuse xstr so it will leave them alone.
+  */
+-#ifdef	notdef
++#if	defined(__netos__)
++char	direct[ONMSZ] =
++	{'/', 'd', 'i', 's', 'k', '1', '/', 't', 'm', 'p'};
++#elif	defined(notdef)
+ char	direct[ONMSZ] =
+ 	{'/', 't', 'm', 'p'}; 
+ #else
+diff -ruN ./ex_io.c ../../b/ex-050325/ex_io.c
+--- a/ex_io.c	2005-03-12 12:52:11.000000000 -0800
++++ b/ex_io.c	2026-09-26 19:51:25.628860540 -0700
+@@ -315,7 +315,11 @@
+ 	}
+ 	if (pipe(pvec) < 0)
+ 		error(catgets(catd, 1, 82, "Can't make pipe to glob"));
++#ifdef	__netos__
++	pid = vfork();
++#else
+ 	pid = fork();
++#endif
+ 	io = pvec[0];
+ 	if (pid < 0) {
+ 		close(pvec[1]);
+diff -ruN ./ex_subr.c ../../b/ex-050325/ex_subr.c
+--- a/ex_subr.c	2005-03-04 04:39:22.000000000 -0800
++++ b/ex_subr.c	2026-09-26 19:51:25.634023807 -0700
+@@ -1017,6 +1017,9 @@
+ 	tflush();
+ #endif
+ 	synctmp();
++#ifdef	__netos__
++	return (0);	/* no expreserve */
++#endif
+ 	pid = fork();
+ 	if (pid < 0)
+ 		return (0);
+diff -ruN ./ex_unix.c ../../b/ex-050325/ex_unix.c
+--- a/ex_unix.c	2005-03-12 12:52:11.000000000 -0800
++++ b/ex_unix.c	2026-09-26 20:31:02.078035809 -0700
+@@ -326,9 +326,25 @@
+ 	struct termios f;	/* mjm: was register */
+ 	register int lines = lineDOL();
+ 	struct stat statb;
++#ifdef	__netos__
++	char tmp[ONMSZ + 16];
++#endif
+ 
+ 	mode++;
+ 	if (mode & 2) {
++#ifdef	__netos__
++		/* no fork to feed a pipe: stage the lines in a temp file */
++		signal(SIGINT, SIG_IGN);
++		snprintf(tmp, sizeof tmp, "%s/ExfXXXXXX", svalue(DIRECTORY));
++		if ((io = mkstemp(tmp)) < 0)
++			error("Can't make temp file for filter");
++		putfile(1);
++		close(io);
++		if ((pvec[0] = open(tmp, O_RDONLY)) < 0)
++			error("Can't reopen temp file for filter");
++		io = pvec[0];
++		setrupt();
++#else
+ 		signal(SIGINT, SIG_IGN);
+ 		if (pipe(pvec) < 0)
+ 			error(catgets(catd, 1, 202, "Can't make pipe"));
+@@ -349,6 +365,7 @@
+ 		close(pvec[1]);
+ 		io = pvec[0];
+ 		setrupt();
++#endif
+ 	}
+ 	f = unixex("-c", uxb, (mode & 2) ? pvec[0] : 0, mode);
+ 	if (mode == 3) {
+@@ -375,6 +392,10 @@
+ 	close(io);
+ 	io = -1;
+ 	unixwt(!inopen, f);
++#ifdef	__netos__
++	if (mode & 2)
++		unlink(tmp);
++#endif
+ 	netchHAD(lines);
+ }
+ 
+diff -ruN ./ex.c ../../b/ex-050325/ex.c
+--- a/ex.c	2005-03-04 04:44:46.000000000 -0800
++++ b/ex.c	2026-09-26 21:04:38.519154877 -0700
+@@ -567,6 +567,12 @@
+ 		value(PROMPT) = intty;
+ 		if ((cp = getenv("SHELL")) != NULL && *cp != '\0')
+ 			safecp(shell, cp, sizeof shell, "$SHELL too long");
++#ifdef	__netos__
++		if ((cp = getenv("TMPDIR")) != NULL && *cp != '\0')
++			safecp(direct, cp, sizeof direct, "$TMPDIR too long");
++		else
++			mkdir(direct, 01777);
++#endif
+ 		if (fast || !intty)
+ 			setterm("dumb");
+ 		else {
+diff -ruN ./ex.h ../../b/ex-050325/ex.h
+--- a/ex.h	2005-03-04 04:44:46.000000000 -0800
++++ b/ex.h	2026-09-26 19:51:25.612744238 -0700
+@@ -123,6 +123,9 @@
+ #include <ctype.h>
+ #include <errno.h>
+ #include <signal.h>
++#ifdef	__netos__
++#undef	SIGTSTP		/* netOS has no job control */
++#endif
+ #include <setjmp.h>
+ 
+ #include <stdarg.h>
+diff -ruN ./netos.c ../../b/ex-050325/netos.c
+--- a/netos.c	1969-12-31 16:00:00.000000000 -0800
++++ b/netos.c	2026-09-26 19:51:43.211713941 -0700
+@@ -0,0 +1 @@
++char *poolsbrk(long v) { return 0; }

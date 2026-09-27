@@ -4,6 +4,7 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <netdb.h>
+#include <stdio.h>
 
 extern struct hostent *netos_gethostbyname(const char *);
 extern struct hostent *netos_gethostbyaddr(const char *, int, int);
@@ -102,4 +103,48 @@ char *inet_ntoa(struct in_addr a)
 		*p++ = i < 3 ? '.' : 0;
 	}
 	return buf;
+}
+
+/* netOS has no /etc/protocols or /etc/networks */
+static struct protoent protos[] = {
+	{ "ip", 0, 0 }, { "icmp", 0, 1 }, { "tcp", 0, 6 }, { "udp", 0, 17 }, { 0, 0, 0 }
+};
+
+struct protoent *getprotobyname(const char *n)
+{
+	struct protoent *p;
+
+	for (p = protos; p->p_name; p++)
+		if (!strcmp(p->p_name, n)) return p;
+	return 0;
+}
+
+struct protoent *getprotobynumber(int n)
+{
+	struct protoent *p;
+
+	for (p = protos; p->p_name; p++)
+		if (p->p_proto == n) return p;
+	return 0;
+}
+
+struct servent *getservbyport(int port, const char *proto) { return 0; }
+struct netent *getnetbyname(const char *n) { return 0; }
+struct netent *getnetbyaddr(unsigned long a, int t) { return 0; }
+
+const char *hstrerror(int e)
+{
+	switch (e) {
+	case HOST_NOT_FOUND: return "Unknown host";
+	case TRY_AGAIN: return "Host name lookup failure";
+	case NO_RECOVERY: return "Unknown server error";
+	case NO_DATA: return "No address associated with name";
+	}
+	return "Unknown resolver error";
+}
+
+void herror(const char *s)
+{
+	if (s && *s) fprintf(stderr, "%s: ", s);
+	fprintf(stderr, "%s\n", hstrerror(h_errno));
 }

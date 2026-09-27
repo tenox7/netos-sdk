@@ -1,15 +1,13 @@
-#ifndef _SIGNAL_H
-#define _SIGNAL_H
-/* 4.x BSD signal numbers */
-#define SIGHUP	1
-#define SIGINT	2
-#define SIGQUIT	3
-#define SIGKILL	9
-#define SIGPIPE	13
-#define SIGALRM	14
-#define SIGTERM	15
-#define SIGCHLD	20
-#define SIG_DFL	((void (*)(int)) 0)
-#define SIG_IGN	((void (*)(int)) 1)
-int kill(int, int);
+/* newlib's, plus the sigaction flags it leaves out */
+#include_next <signal.h>
+#ifndef _NETOS_SIGNAL_H
+#define _NETOS_SIGNAL_H
+typedef void (*sighandler_t)(int);
+#define _NSIG	NSIG
+#endif
+#ifndef SA_RESTART
+#define SA_ONSTACK	0x0010
+#define SA_RESTART	0x0020
+#define SA_NODEFER	0x0040
+#define SA_RESETHAND	0x0080
 #endif

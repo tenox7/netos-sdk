@@ -18,5 +18,8 @@ run the name:
 | `nettest` | TCP/UDP echo server on port 7777, or a client given `host port [text]` |
 | `rshd` | BSD remote-shell daemon on port 514; run `rsh <station> <cmd>` |
 | `telnetd` | telnet server on port 23 running the netOS shell; one session at a time |
+| `curses` | ncurses: a box, and the keys you press |
+| `vi` | the traditional ex/vi 3.7 |
+| `busybox` | busybox 1.00; `busybox` alone lists its applets |
 
-Rebuild any of them with `make examples`.
+Rebuild them with `make examples` and `make ports`.

@@ -29,32 +29,52 @@ can try without building the toolchain.
 
 ## What works
 
-Ordinary C, including varargs, floating point and `long long`. `examples/`
-builds unmodified upstream source — `aclock-vt100.c` is
-[aclock](https://github.com/tenox7/aclock) straight from its own repository,
-compiled with no netOS-specific changes at all.
+Ordinary C, including varargs, floating point and `long long`, with a complete
+C library: newlib 1.18 for stdio, stdlib, string, math, time, regex, glob and
+getopt, and libnetos underneath it mapping newlib's system calls onto netOS.
+`examples/` builds unmodified upstream source — `aclock-vt100.c` is
+[aclock](https://github.com/tenox7/aclock) straight from its own repository.
 
-libnetos provides stdio (the printf family, `FILE`, `fopen`/`fread`/`fwrite`),
-`string.h`, `malloc`, `strtol`/`atoi`, `getenv`, the time functions and
-`sleep`/`usleep`. Most of it is plain computation done locally; file I/O, time,
-memory and `select` go through netOS, and `qsort`/`sscanf` are called straight
-out of the kernel. `netos.h` exposes the kernel's own C library directly.
+Files and directories (`stat` family, `opendir`/`readdir`, `getcwd`,
+`mkdir`/`rename`/`link`/`symlink`/`chmod`/`utimes`...), processes (`vfork`,
+`execve`/`execvp`, `wait`/`waitpid`, `pipe`, `dup2`, `kill`, `system`), BSD
+sockets and `syslog` go through the kernel. `malloc` is the kernel heap.
+`netos.h` exposes the kernel's own C library directly.
 
-BSD sockets work through `sys/socket.h`, `netinet/in.h`, `arpa/inet.h`,
-`netdb.h` and `errno.h`, mapped straight onto the kernel's socket calls.
-`examples/nettest.c` is a TCP/UDP echo server, or a client given a host.
+netOS has no `fork`, only `vfork`, so a child may only rearrange fds and exec
+or `_exit`. Kernel signals do not reach newlib's handlers; `raise` and a raw
+terminal's ^C do.
 
-Process control is `vfork`, `execv`/`execl`, `dup2`, `pipe`, `wait` and
-`kill` (`unistd.h`, `signal.h`, `sys/wait.h`). netOS has no `fork`, only
-`vfork`, so a child may only rearrange fds and `execv`/`_exit`.
-`examples/rshd.c` is a BSD remote-shell daemon built on all of it, and
-`examples/telnetd.c` a telnet server running the netOS shell over a socketpair.
+`examples/rshd.c` is a BSD remote-shell daemon, `examples/telnetd.c` a telnet
+server running the netOS shell, `examples/nettest.c` a TCP/UDP echo test.
 
-Floating point goes through libgcc soft float — the i960 core has no FPU, and
-the i960 gcc configuration never built `fp-bit.c`, so the SDK builds it. `%f`
-and `%e` work, `%g` maps to `%f`, and the integer part must fit in a long.
-This costs roughly 11 KB per image because printf always pulls the float code
-in; call `netos_printf` instead if size matters more.
+Floating point goes through libgcc soft float; the i960 core has no FPU, and
+the i960 gcc configuration never built `fp-bit.c`, so the SDK builds it.
+
+## Terminals
+
+A netOS terminal is one end of a socketpair whose other end, the kernel's
+Console Window or `telnetd`, does the line discipline. termios switches its raw
+and no-echo flags; `TIOCGWINSZ` reports `LINES` and `COLUMNS`, else 24x80, and
+`TERM` defaults to `vt220`. `telnetd` sets all three from the telnet client.
+
+`-ltermcap` is the 2.11BSD termcap library and `-lncurses` (also `-lcurses`,
+`-lpanel`, `-lmenu`, `-lform`) ncurses 5.9. netOS has no terminal database, so
+both carry vt220, vt100, xterm, screen, linux, ansi and dumb built in.
+`examples/curses.c` shows keys as curses reads them.
+
+## Ports
+
+`ports/` builds open source software from its upstream release plus a small
+patch:
+
+    ./nsdk sh ports/vi/build.sh         traditional vi, ex/vi 3.7
+    ./nsdk sh ports/busybox/build.sh    busybox 1.00, the applets in ports/busybox/applets
+
+vi and busybox keep temp files in `/disk1/tmp`, or `$TMPDIR`. Run busybox
+applets as `busybox ls`, or add `ports/busybox/apps.cfg` to `apps.cfg` to call
+them by name (names netOS already has are left out); `busybox hush` and
+`busybox msh` find them either way.
 
 ## Layout
 
@@ -62,17 +82,20 @@ in; call `netos_printf` instead if size matters more.
     nsdk            run a toolchain command against the current directory
     netos-gcc       compiler driver: C in, loadable b.out image out
     mkbout.c        post-processor that makes ld's output loadable
-    build/          binutils and gcc build + patches
-    libnetos/       the C library, headers and a host-side test harness
+    build/          binutils, gcc, newlib and ncurses builds + patches
+    libnetos/       newlib's system layer and the netOS headers
+    libtermcap/     the 2.11BSD termcap library
     examples/       sample programs
+    ports/          open source software built for netOS
     tools/          the reverse-engineering scripts
     prebuilt/       ready-to-run images
 
 ## Toolchain
 
-binutils 2.11.2 and gcc 2.95.3 targeting `i960-intel-nindy` — the last releases
-whose assembler emits i960 b.out and whose compiler has an i960 back end. Three
-things are non-obvious:
+binutils 2.11.2, gcc 2.95.3, newlib 1.18.0 and ncurses 5.9 targeting
+`i960-intel-nindy`; binutils 2.11.2 is the last release whose assembler emits
+i960 b.out. `netos-gcc` behaves like `cc` (`-c`, `.o` and `.a` inputs, `-l`),
+so Makefiles can use it as `CC`. Some things are non-obvious:
 
 * The container is **32-bit on purpose**. gas 2.11's b.out header struct is
   declared with `unsigned long`, so on a 64-bit host it writes 88-byte headers
@@ -83,6 +106,14 @@ things are non-obvious:
 * libgcc needs `libgcc1.null` for the machine-specific half, and
   `LIBGCC2_CFLAGS` must be *appended to* rather than replaced or you lose
   `-DIN_GCC`.
+* gcc's `limits.h` and `float.h` are installed by hand; a cross gcc 2.95 can
+  only generate `float.h` by running on the target.
+* newlib gets an `i960-*-*` host entry: its malloc is replaced by the kernel
+  heap, `rename` is a system call, and the POSIX declarations it keeps for
+  RTEMS are enabled for `__netos__`. Its posix regex, glob and exec functions
+  and the i960 `setjmp.S` are added to `libc.a` by hand.
+* `long double` is 96-bit extended and libgcc has no arithmetic for it;
+  libnetos supplies only the conversions newlib's printf and scanf use.
 
 ## Executable format
 
@@ -137,11 +168,12 @@ the same group/index pairs, encoded as `sc` with `(group<<16)|index` in `r0`.
 | 7/0x13 | setsockopt | `(s, 0xffff, 4, &on, 4)`, perror `setsockopt` |
 | 7/0x16 | socket | `(2, 1, 0)`, perror `socket` |
 | 7/0x17 | socketpair | `(1, 1, 0, sv)` in multiNC |
-| 7/0x18 | wait | one status-ptr arg, returns the pid |
+| 7/0x18 | wait | one status-ptr arg, returns the pid; the status is the bare exit code |
 | 7/0x19 | write | return compared against the requested count |
 | 7/0x1a | writev | Xlib `_XSend` |
 | 7/0x1b | pipe | `pipe(&fds[2])` in tar, netscape, gview |
-| 7/0x1d | execv | `execv(path, argv)` then "olvwm: exec" error |
+| 7/0x1c | _exit | `_exit(1)` after "Exec of %s failed" in gview's vfork child |
+| 7/0x1d | execve | "olvwm: exec"; `g2` is the environment, verified on hardware |
 | 7/0x1e | vfork | the shipped apps' error string says "Vfork" |
 | 7/0x22 | chdir | `_du` "cannot change to directory %s" |
 | 7/0x23 | stat | `(path, statbuf)`, paired with 0x24 in `_ls` |
@@ -149,9 +181,25 @@ the same group/index pairs, encoded as `sc` with `(group<<16)|index` in `r0`.
 | 7/0x29 | lseek | offset computed as `a*b`, whence 0 |
 | 7/0x26 | getpid | no args, result stored as a pid |
 | 7/0x2c | select | 5 args ending in a timeval; xscreensaver's delay idiom |
+| 7/0x2a | gettimeofday | `(tv, tz)` in tar, then a short read of the time zone |
 | 7/0x2f | getsockname | perror `getsockname` in rexec |
-| 7/0x45 | readlink | `(path, stackbuf, 256)` in `_ls` |
+| 7/0x30 | chmod | after mkdir in `_mkdir -m`; `_chmod` |
+| 7/0x31 | fchmod | `(fileno(fp), mode)` in edit; rcp -p |
+| 7/0x32 | ftruncate | `(fd, size)` in `_touch` |
+| 7/0x34 | mkdir | "cannot create directory `%s'" in `_mkdir` |
+| 7/0x37 | utimes | two timevals with zero microseconds in `_mv` |
+| 7/0x38 | getsockopt | `(s, 0xffff, SO_ERROR, &v, &len)` in vidconf |
+| 7/0x3c | chown | `(path, uid, gid)`, each checked against -1, in `_mkdir` |
+| 7/0x41 | link | on hardware: same inode, link count 2 |
+| 7/0x42 | mkfifo | `(path, mode)` before "Could not make %s" in tar |
+| 7/0x43 | mknod | `(path, S_IFCHR or S_IFBLK mode, rdev)` in tar |
+| 7/0x45 | readlink | `(path, stackbuf, 256)` in `_ls`; hangs the Station, not used |
+| 7/0x46 | rename | "cannot move `%s' to `%s'" in `_mv` |
 | 7/0x47 | rmdir | only extra call in `_rmdir` |
+| 7/0x4a | symlink | on hardware: mode 120777, size of the target name |
+| 7/0x4d | umask | `umask(0)`, then restored, in `_mkdir` |
+| 7/0x4e | creat | `(path, 0666)` in `_touch` |
+| 7/0x4f | newthread | `(?, 1024, fn, arg, "rexec_in")`, error "newthread" in rexec |
 | 9/0xfb | XOpenDisplay | `waitforserver` retries it with a display name |
 | 10/0x07 | bcopy(src,dst,n) | the localtime shim in `dclock` |
 | 10/0x09 | bzero | `FD_ZERO`; `(&sin, 16)` before bind |
@@ -159,6 +207,7 @@ the same group/index pairs, encoded as `sc` with `(group<<16)|index` in `r0`.
 | 10/0x18 | fprintf | stderr plus a format string; 1453 call sites |
 | 10/0x1c | free | frees localtime's result; most-called entry, 1545 sites |
 | 10/0x20 | getenv | args DISPLAY, GS_LIB, POSIXLY_CORRECT, TABSIZE |
+| 10/0x23 | index | `(s, '/')`, `(s, '=')` in `_mkdir` and `_dd` |
 | 10/0x24 | inet_addr | tn3270 tests the result for -1 before "unknown host" |
 | 10/0x26 | inet_ntoa | xhost's fallback when gethostbyaddr fails |
 | 10/0x2a | malloc | GNU `xmalloc` in `_ls` retries it with 1 on NULL |
@@ -173,7 +222,7 @@ the same group/index pairs, encoded as `sc` with `(group<<16)|index` in `r0`.
 | 10/0x51 | strcpy | rexec: `strcpy(malloc(strlen(tok) + 1), tok)` |
 | 10/0x54 | strlen | the same line; rexec's `write(s, num, strlen(num) + 1)` |
 | 10/0x57 | strncmp | 3 args, XPM keywords, `"nfs://"`, `"%!PS-Adobe-"` |
-| 10/0x67 | readdir | every site is a `while (readdir(d))` loop between 0x66 and 0x6b |
+| 10/0x67 | readdir | `while (readdir(d))` between 0x66 and 0x6b; SunOS dirent, name at 12 |
 | 10/0x76 | fputc | `fputc('\n', stream)` — first argument is the literal 0xa |
 | 10/0x7c | gethostbyname | returns a **malloc'd** hostent; apps copy it and free it |
 | 10/0x7d | gethostbyaddr | `(addr, 4, AF_INET)` after getpeername in vidconf |
@@ -191,17 +240,18 @@ to `writev`; 10 has `malloc`, `memchr` .. `memset`, `strcasecmp` .. `strlen`),
 so each identified entry pins down its neighbours. `errno` lives at the address
 `calls 8` returns for `g0=0`, with netOS's own numbering from the kernel's name
 table at 0x302cbf50. Sockets are 4.3BSD: 16-bit `sa_family` and no `sa_len`,
-BSD `SOL_SOCKET`/`SO_*` values, ioctls numbered `('f'<<8)|n`.
+BSD `SOL_SOCKET`/`SO_*` values, ioctls numbered `('f'<<8)|n`. `stat` fills the
+4.3BSD 64-byte `struct stat`. ioctl 0x6603 sets, 0x6604 clears and 0x6608 reads
+a descriptor's flags: FREAD/FWRITE in the low bits, and on a pty socketpair,
+shared by both ends, 0x4000 raw and 0x8000 no-echo.
 
-Also identified, not wrapped yet: 7/0x14 sigblock, 7/0x15 sigsetmask,
-7/0x21 fcntl, 7/0x25 fstat, 7/0x28 unlink, 10/0x2f memset, 10/0x34 perror,
-10/0x48 sleep, 10/0x55 strncasecmp, 10/0x5e syslog, 10/0x66 opendir,
-10/0x6b closedir; 13/0x05 returns the `FILE` for fd 0, 1 or 2.
+Also identified: 7/0x14 sigblock, 7/0x15 sigsetmask, 7/0x21 fcntl, 7/0x25
+fstat, 7/0x28 unlink, 10/0x2f memset, 10/0x34 perror, 10/0x48 sleep, 10/0x55
+strncasecmp, 10/0x5e syslog, 10/0x66 opendir, 10/0x6b closedir; 13/0x05
+returns the `FILE` for fd 0, 1 or 2. 7/0x52 and 7/0x53 go with newthread.
 
-Probable but unverified: `10/0x2d` memcpy. `stat`/`lstat` are certainly that
-pair, but which index is which is a guess — they appear in adjacent branches of
-the same test. `struct tm` is the BSD 44-byte layout (nine ints, `tm_gmtoff`,
-`tm_zone`).
+Probable but unverified: `10/0x2d` memcpy, `10/0x46` signal. `struct tm` is
+the BSD 44-byte layout (nine ints, `tm_gmtoff`, `tm_zone`).
 
 ## Reverse-engineering tools
 
@@ -234,11 +284,19 @@ Built and run on real hardware. Not exhaustively tested.
 * i960 only. PowerPC 8xx netOS would need a `powerpc-eabi` toolchain, but the
   system call map above transfers unchanged.
 * No X11. Group 9 is Xlib and completely unmapped apart from `XOpenDisplay`.
-* `%f` handles values whose integer part fits in a long; larger prints `huge`.
-* No `opendir`/`readdir`, no `signal` handlers (only `kill`), no `getsockopt`
-  or `gethostname`. Only `vfork`, so no post-`fork` code before `execv`.
+* Only `vfork`: no post-`fork` code before `execve`, so shells and servers
+  must exec or stay in one process.
+* No asynchronous signals into newlib's handlers, and no interval timers.
+* No window size from the terminal; `LINES` and `COLUMNS` stand in.
+* `long double` has no arithmetic, only conversions to and from `double`.
+* `readlink` always fails: the kernel's hangs the Station. `realpath` leaves
+  symlinks as they are.
+* A bad pointer can take the whole Station down: there is no MMU, and the heap
+  is the kernel's own.
 
 ## License
 
-Apache 2.0. `examples/aclock-vt100.c` is Antoni Sawicki's, included unmodified
-from the aclock distribution to demonstrate that upstream source builds as-is.
+Apache 2.0. `libtermcap/` is BSD-licensed, from 2.11BSD with Gunnar Ritter's
+changes. newlib, ncurses and the ports keep their own licenses.
+`examples/aclock-vt100.c` is Antoni Sawicki's, included unmodified from the
+aclock distribution to demonstrate that upstream source builds as-is.

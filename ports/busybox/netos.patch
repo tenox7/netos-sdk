@@ -1,0 +1,458 @@
+--- a/applets/busybox.c
++++ b/applets/busybox.c
+@@ -169,20 +169,56 @@
+ 	/* Flag that we've been here already */
+ 	been_there_done_that = 1;
+ 
+-	/* Move the command line down a notch */
+-	/* Preserve pointers so setproctitle() works consistently */
+-	len = argv[argc] + strlen(argv[argc]) - argv[1];
+-	memmove(argv[0], argv[1], len);
+-	memset(argv[0] + len, 0, argv[1] - argv[0]);
+-
+-	/* Fix up the argv pointers */
+-	len = argv[1] - argv[0];
+-	memmove(argv, argv + 1, sizeof(char *) * (argc + 1));
+-	for (i = 0; i < argc; i++)
+-		argv[i] -= len;
++	/* Move the command line down a notch; netOS does not keep the argument
++	   strings contiguous, so shift the pointers only */
++	return (main(argc, argv + 1));
++}
++
++#ifdef __netos__
++#include <alloca.h>
++#undef execvp
++
++extern char **environ;
++
++int bb_netos_execve(const char *file, char *const argv[], char *const envp[])
++{
++	const char *name = strrchr(file, '/') ? strrchr(file, '/') + 1 : file;
++	char **av;
++	int n;
++
++	if (errno != ENOENT || !find_applet_by_name(name))
++		return -1;
++	for (n = 0; argv[n]; n++)
++		;
++	av = alloca((n + 2) * sizeof(*av));
++	av[0] = "busybox";
++	av[1] = (char *) name;
++	memcpy(av + 2, argv + 1, n * sizeof(*av));
++	return execve("busybox", av, envp);
++}
++
++int bb_netos_execvp(const char *file, char *const argv[])
++{
++	execvp(file, argv);
++	return bb_netos_execve(file, argv, environ);
++}
++
++int bb_netos_tmpfile(void)
++{
++	char *dir = getenv("TMPDIR"), tmp[256];
++	int fd;
+ 
+-	return (main(argc, argv));
++	if (!dir) {
++		dir = "/disk1/tmp";
++		mkdir(dir, 0777);
++	}
++	snprintf(tmp, sizeof tmp, "%s/bbXXXXXX", dir);
++	if ((fd = mkstemp(tmp)) < 0)
++		bb_perror_msg_and_die("%s", tmp);
++	unlink(tmp);
++	return fd;
+ }
++#endif
+ 
+ /*
+ Local Variables:
+--- a/archival/libunarchive/open_transformer.c
++++ b/archival/libunarchive/open_transformer.c
+@@ -20,6 +20,18 @@
+ #include "libbb.h"
+ 
+ /* transformer(), more than meets the eye */
++#ifdef __netos__
++/* netOS has no fork: run the transformer into a temp file, not a pipe */
++extern int open_transformer(int src_fd, int (*transformer)(int src_fd, int dst_fd))
++{
++	int fd = bb_netos_tmpfile();
++
++	transformer(src_fd, fd);
++	close(src_fd);
++	lseek(fd, 0, SEEK_SET);
++	return fd;
++}
++#else
+ extern int open_transformer(int src_fd, int (*transformer)(int src_fd, int dst_fd))
+ {
+ 	int fd_pipe[2];
+@@ -49,3 +61,4 @@
+ 
+ 	return(fd_pipe[0]);
+ }
++#endif
+--- a/archival/tar.c
++++ b/archival/tar.c
+@@ -455,6 +455,35 @@
+ 
+ #ifdef CONFIG_FEATURE_TAR_GZIP
+ 	if (gzip) {
++#ifdef __netos__
++		/* gzip is a busybox applet found by name, and a vfork child may
++		   only exec or _exit */
++		if (pipe(gzipDataPipe) < 0) {
++			bb_perror_msg_and_die("Failed to create gzip pipe");
++		}
++		(void) &include;
++		(void) &errorFlag;
++		gzipPid = vfork();
++		if (gzipPid == 0) {
++			dup2(gzipDataPipe[0], 0);
++			close(gzipDataPipe[0]);
++			close(gzipDataPipe[1]);
++			if (tbInfo.tarFd != 1)
++				dup2(tbInfo.tarFd, 1);
++			execlp("busybox", "busybox", "gzip", "-f", 0);
++			vfork_exec_errno = errno;
++			_exit(-1);
++		}
++		if (gzipPid < 0) {
++			bb_perror_msg_and_die("Failed to vfork gzip process");
++		}
++		if (vfork_exec_errno) {
++			errno = vfork_exec_errno;
++			bb_perror_msg_and_die("Could not exec gzip process");
++		}
++		close(gzipDataPipe[0]);
++		tbInfo.tarFd = gzipDataPipe[1];
++#else
+ 		if (pipe(gzipDataPipe) < 0 || pipe(gzipStatusPipe) < 0) {
+ 			bb_perror_msg_and_die("Failed to create gzip pipe");
+ 		}
+@@ -506,6 +535,7 @@
+ 		} else {
+ 			bb_perror_msg_and_die("Failed to vfork gzip process");
+ 		}
++#endif
+ 	}
+ #endif
+ 
+--- a/coreutils/expr.c
++++ b/coreutils/expr.c
+@@ -245,10 +245,8 @@
+ static VALUE *docolon (VALUE *sv, VALUE *pv)
+ {
+ 	VALUE *v;
+-	const char *errmsg;
+-	struct re_pattern_buffer re_buffer;
+-	struct re_registers re_regs;
+-	int len;
++	regex_t re_buffer;
++	regmatch_t re_regs[2];
+ 
+ 	tostring (sv);
+ 	tostring (pv);
+@@ -260,27 +258,18 @@
+ 		pv->u.s);
+ 	}
+ 
+-	len = strlen (pv->u.s);
+-	memset (&re_buffer, 0, sizeof (re_buffer));
+-	memset (&re_regs, 0, sizeof (re_regs));
+-	re_buffer.allocated = 2 * len;
+-	re_buffer.buffer = (unsigned char *) xmalloc (re_buffer.allocated);
+-	re_buffer.translate = 0;
+-	re_syntax_options = RE_SYNTAX_POSIX_BASIC;
+-	errmsg = re_compile_pattern (pv->u.s, len, &re_buffer);
+-	if (errmsg) {
+-		bb_error_msg_and_die("%s", errmsg);
+-	}
++	if (regcomp (&re_buffer, pv->u.s, 0) != 0)
++		bb_error_msg_and_die("Invalid regular expression");
+ 
+-	len = re_match (&re_buffer, sv->u.s, strlen (sv->u.s), 0, &re_regs);
+-	if (len >= 0) {
++	/* expr anchors the match at the start of the string */
++	if (regexec (&re_buffer, sv->u.s, 2, re_regs, 0) == 0 && re_regs[0].rm_so == 0) {
+ 		/* Were \(...\) used? */
+-		if (re_buffer.re_nsub > 0) { /* was (re_regs.start[1] >= 0) */
+-			sv->u.s[re_regs.end[1]] = '\0';
+-			v = str_value (sv->u.s + re_regs.start[1]);
++		if (re_buffer.re_nsub > 0) {
++			sv->u.s[re_regs[1].rm_eo] = '\0';
++			v = str_value (sv->u.s + re_regs[1].rm_so);
+ 		}
+ 		else
+-			v = int_value (len);
++			v = int_value (re_regs[0].rm_eo);
+ 	}
+ 	else {
+ 		/* Match failed -- return the right kind of null.  */
+@@ -289,7 +278,7 @@
+ 		else
+ 			v = int_value (0);
+ 	}
+-	free (re_buffer.buffer);
++	regfree (&re_buffer);
+ 	return v;
+ }
+ 
+--- a/include/busybox.h
++++ b/include/busybox.h
+@@ -33,7 +33,7 @@
+ #include <sys/types.h>
+ 
+ #if __GNU_LIBRARY__ < 5
+-#ifndef __dietlibc__
++#if !defined(__dietlibc__) && !defined(__netos__)
+ #error "Sorry, libc5 is not supported"
+ #endif
+ #endif
+--- a/include/libbb.h
++++ b/include/libbb.h
+@@ -484,4 +484,14 @@
+ #define HASH_MD5	2
+ extern int hash_fd(int fd, const size_t size, const uint8_t hash_algo, uint8_t *hashval);
+ 
++#ifdef __netos__
++/* netOS finds programs by name, and our applets need not be in apps.cfg:
++   what it cannot find runs as "busybox <applet>" */
++extern int bb_netos_execve(const char *file, char *const argv[], char *const envp[]);
++extern int bb_netos_execvp(const char *file, char *const argv[]);
++#define execvp(f, a) bb_netos_execvp(f, a)
++/* an unlinked temp file in $TMPDIR, else /disk1/tmp */
++extern int bb_netos_tmpfile(void);
++#endif
++
+ #endif /* __LIBCONFIG_H__ */
+--- a/libbb/bb_askpass.c
++++ b/libbb/bb_askpass.c
+@@ -53,7 +53,10 @@
+ 	fflush(stdout);
+ 
+ 	tcgetattr(STDIN_FILENO, &new);
+-	new.c_iflag &= ~(IUCLC|IXON|IXOFF|IXANY);
++	new.c_iflag &= ~(IXON|IXOFF|IXANY);
++#ifdef IUCLC
++	new.c_iflag &= ~IUCLC;
++#endif
+ 	new.c_lflag &= ~(ECHO|ECHOE|ECHOK|ECHONL|TOSTOP);
+ 	tcsetattr(STDIN_FILENO, TCSANOW, &new);
+ 
+--- a/libbb/dump.c
++++ b/libbb/dump.c
+@@ -261,6 +261,7 @@
+ 				if (!(pr->fmt = realloc(pr->fmt, strlen(pr->fmt)+(p3-p2)+1)))
+ 					bb_perror_msg_and_die("hexdump");
+ 				strcat(pr->fmt, p2);
++				pr->cchar = pr->fmt + (p1 - fmtp);	/* realloc may move it */
+ 				*p3 = savech;
+ 				p2 = p3;
+ 			}
+--- a/libbb/Makefile.in
++++ b/libbb/Makefile.in
+@@ -23,23 +23,23 @@
+ srcdir=$(top_srcdir)/libbb
+ 
+ LIBBB_SRC:= \
+-	bb_asprintf.c ask_confirmation.c change_identity.c chomp.c \
++	bb_asprintf.c ask_confirmation.c  chomp.c \
+ 	compare_string_array.c concat_path_file.c copy_file.c copyfd.c \
+-	correct_password.c create_icmp_socket.c create_icmp6_socket.c \
+-	device_open.c dump.c error_msg.c error_msg_and_die.c find_mount_point.c \
+-	find_pid_by_name.c find_root_device.c fgets_str.c full_read.c \
++	 create_icmp_socket.c create_icmp6_socket.c \
++	device_open.c dump.c error_msg.c error_msg_and_die.c  \
++	 find_root_device.c fgets_str.c full_read.c \
+ 	full_write.c get_last_path_component.c get_line_from_file.c get_ug_id.c \
+ 	get_terminal_width_height.c hash_fd.c herror_msg.c herror_msg_and_die.c \
+-	human_readable.c inet_common.c inode_hash.c interface.c isdirectory.c \
+-	kernel_version.c last_char_is.c llist_add_to.c login.c loop.c \
+-	make_directory.c mode_string.c module_syscalls.c mtab.c mtab_file.c \
++	human_readable.c inet_common.c inode_hash.c  isdirectory.c \
++	kernel_version.c last_char_is.c llist_add_to.c   \
++	make_directory.c mode_string.c   mtab_file.c \
+ 	my_getgrgid.c my_getgrnam.c my_getpwnam.c my_getug.c\
+-	my_getpwuid.c obscure.c parse_mode.c parse_number.c perror_msg.c \
++	my_getpwuid.c  parse_mode.c parse_number.c perror_msg.c \
+ 	perror_msg_and_die.c print_file.c get_console.c \
+-	process_escape_sequence.c procps.c pwd2spwd.c pw_encrypt.c qmodule.c \
++	process_escape_sequence.c     \
+ 	read_package_field.c recursive_action.c remove_file.c \
+-	restricted_shell.c run_parts.c run_shell.c safe_read.c safe_write.c \
+-	safe_strncpy.c setup_environment.c simplify_path.c syscalls.c \
++	 run_parts.c  safe_read.c safe_write.c \
++	safe_strncpy.c  simplify_path.c  \
+ 	trim.c u_signal_names.c vdprintf.c verror_msg.c \
+ 	vherror_msg.c vperror_msg.c wfopen.c xconnect.c xgetcwd.c \
+ 	xgethostbyname.c xgethostbyname2.c xreadlink.c xregcomp.c xgetlarg.c \
+--- a/shell/hush.c
++++ b/shell/hush.c
+@@ -1136,6 +1136,11 @@
+ 		bb_perror_msg("couldn't exec: %s",child->argv[0]);
+ 		_exit(1);
+ 	} else if (child->group) {
++#ifdef __netos__
++		/* a vforked child may not vfork again on netOS */
++		bb_error_msg("a group in a pipeline needs fork");
++		_exit(1);
++#endif
+ 		debug_printf("runtime nesting to group\n");
+ 		interactive=0;    /* crucial!!!! */
+ 		rcode = run_list_real(child->group);
+@@ -1221,6 +1226,7 @@
+ 	int attributes;
+ 	int status;
+ 	int prognum = 0;
++	int fg_rcode = 0;
+ 	struct pipe *pi;
+ 	pid_t childpid;
+ 
+@@ -1231,15 +1237,19 @@
+ 
+ 	while ((childpid = waitpid(-1, &status, attributes)) > 0) {
+ 		if (fg_pipe) {
+-			int i, rcode = 0;
++			/* wait for the whole pipe, not just its first exit */
++			int i, found = 0, left = 0;
+ 			for (i=0; i < fg_pipe->num_progs; i++) {
+ 				if (fg_pipe->progs[i].pid == childpid) {
++					found = 1;
++					fg_pipe->progs[i].pid = 0;
+ 					if (i==fg_pipe->num_progs-1)
+-						rcode=WEXITSTATUS(status);
+-					(fg_pipe->num_progs)--;
+-					return(rcode);
++						fg_rcode=WEXITSTATUS(status);
+ 				}
++				if (fg_pipe->progs[i].pid) left++;
+ 			}
++			if (found && !left) return fg_rcode;
++			if (found) continue;
+ 		}
+ 
+ 		for (pi = job_list; pi; pi = pi->next) {
+@@ -1439,7 +1449,7 @@
+ 		}
+ 
+ 		/* XXX test for failed fork()? */
+-#if !defined(__UCLIBC__) || defined(__ARCH_HAS_MMU__)
++#if (!defined(__UCLIBC__) || defined(__ARCH_HAS_MMU__)) && !defined(__netos__)
+ 		if (!(child->pid = fork()))
+ #else
+ 		if (!(child->pid = vfork()))
+@@ -1769,7 +1779,10 @@
+ static int glob_needed(const char *s)
+ {
+ 	for (; *s; s++) {
+-		if (*s == '\\') s++;
++		if (*s == '\\') {
++			if (!*++s) break;
++			continue;
++		}
+ 		if (strchr("*[?",*s)) return 1;
+ 	}
+ 	return 0;
+@@ -1790,7 +1803,7 @@
+ 
+ static int xglob(o_string *dest, int flags, glob_t *pglob)
+ {
+-	int gr;
++	int gr, n = flags & GLOB_APPEND ? pglob->gl_pathc : 0;
+ 
+  	/* short-circuit for null word */
+ 	/* we can code this better when the debug_printf's are gone */
+@@ -1805,7 +1818,8 @@
+  	} else if (glob_needed(dest->data)) {
+ 		gr = glob(dest->data, flags, NULL, pglob);
+ 		debug_printf("glob returned %d\n",gr);
+-		if (gr == GLOB_NOMATCH) {
++		/* BSD glob returns 0 when nothing matched */
++		if (gr == GLOB_NOMATCH || (!gr && pglob->gl_pathc == n)) {
+ 			/* quote removal, or more accurately, backslash removal */
+ 			gr = globhack(dest->data, flags, pglob);
+ 			debug_printf("globhack returned %d\n",gr);
+@@ -2255,10 +2269,26 @@
+ FILE *generate_stream_from_list(struct pipe *head)
+ {
+ 	FILE *pf;
++#ifdef __netos__
++	/* no fork, and a vforked child may not vfork again: run the list here
++	   with its output in a temp file */
++	int fd = bb_netos_tmpfile(), save;
++
++	fflush(stdout);
++	save = dup(1);
++	dup2(fd, 1);
++	run_list_real(head);
++	fflush(stdout);
++	dup2(save, 1);
++	close(save);
++	lseek(fd, 0, SEEK_SET);
++	pf = fdopen(fd, "r");
++	return pf;
++#else
+ #if 1
+ 	int pid, channel[2];
+ 	if (pipe(channel)<0) bb_perror_msg_and_die("pipe");
+-#if !defined(__UCLIBC__) || defined(__ARCH_HAS_MMU__)
++#if (!defined(__UCLIBC__) || defined(__ARCH_HAS_MMU__)) && !defined(__netos__)
+ 	pid=fork();
+ #else
+ 	pid=vfork();
+@@ -2288,6 +2318,7 @@
+ 	pf=popen("echo surrogate response","r");
+ 	debug_printf("started fake pipe on FILE *%p\n",pf);
+ #endif
++#endif
+ 	return pf;
+ }
+ 
+@@ -2348,7 +2379,11 @@
+ 	}
+ 	initialize_context(&sub);
+ 	switch(ch) {
++#ifdef __netos__
++		case '(': endch=')'; child->subshell=0; break;	/* no fork: run it here */
++#else
+ 		case '(': endch=')'; child->subshell=1; break;
++#endif
+ 		case '{': endch='}'; break;
+ 		default: syntax();   /* really logic error */
+ 	}
+@@ -2527,7 +2562,7 @@
+ 		case '\'':
+ 			dest->nonnull = 1;
+ 			while(ch=b_getch(input),ch!=EOF && ch!='\'') {
+-				b_addchr(dest,ch);
++				b_addqchr(dest, ch, 1);	/* stays literal through globhack */
+ 			}
+ 			if (ch==EOF) {
+ 				syntax();
+--- a/shell/msh.c
++++ b/shell/msh.c
+@@ -47,6 +47,10 @@
+ 
+ #include "cmdedit.h"
+ #include "busybox.h"
++#ifdef __netos__
++#undef DEFAULT_SHELL
++#define DEFAULT_SHELL "/bin/msh"
++#endif
+ 
+ 
+ /* Conditional use of "register" keyword */
+@@ -3335,6 +3339,9 @@
+ 			break;
+ 		}
+ 	}
++#ifdef __netos__
++	bb_netos_execve(c, v, envp);
++#endif
+ 	return (errno == ENOENT ? "not found" : "cannot execute");
+ }
+ 

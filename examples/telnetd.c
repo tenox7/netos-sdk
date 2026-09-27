@@ -7,9 +7,12 @@
  * kernel's own "pty" program, it runs the netOS shell on one end of a
  * socketpair and supplies the line discipline itself: echo, BS/DEL erase,
  * ^U kill, ^C interrupt, ^D end of input, CR as newline, LF -> CRLF out.
+ * Programs switch it to raw or no-echo with the netOS pty flags, as they do
+ * the kernel's pty.
  *
  * No authentication - anyone who can reach the port gets a shell.
  */
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -19,27 +22,24 @@
 #include <sys/types.h>
 #include <sys/time.h>
 #include <sys/socket.h>
+#include <sys/ioctl.h>
 #include <sys/wait.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <arpa/telnet.h>
 
 #define SHELL		"/bin/sh"
-#define IAC		255
-#define DONT		254
-#define DO		253
-#define WONT		252
-#define WILL		251
-#define SB		250
-#define SE		240
-#define TELOPT_ECHO	1
-#define TELOPT_SGA	3
+#define TGET		0x6608		/* ioctl: the pty flags a program set */
+#define TRAW		0x4000
+#define TNOECHO		0x8000
 
 enum { DATA, CMD, OPT, SUB, SUBIAC };
 
 struct sess {
 	int net, sh, pid;
-	int state, verb, cr, len;
-	char line[512];
+	int state, verb, cr, len, fl, sblen, rows, cols;
+	char line[512], term[32];
+	unsigned char sb[64];
 };
 
 static void put(int fd, const void *p, int n)
@@ -57,18 +57,34 @@ static void option(int net, int verb, int opt)
 	put(net, b, 3);
 }
 
-/* refuse everything but the echo and suppress-go-ahead we offered */
+/* keep echo, suppress-go-ahead, terminal type and window size; refuse the rest */
 static void negotiate(struct sess *s, int opt)
 {
-	if (s->verb == WILL) option(s->net, opt == TELOPT_SGA ? DO : DONT, opt);
+	static const unsigned char ttype[] = { IAC, SB, TELOPT_TTYPE, TELQUAL_SEND, IAC, SE };
+
+	if (s->verb == WILL && opt == TELOPT_TTYPE) put(s->net, ttype, sizeof ttype);
+	else if (s->verb == WILL && opt != TELOPT_NAWS) option(s->net, opt == TELOPT_SGA ? DO : DONT, opt);
 	if (s->verb == DO && opt != TELOPT_ECHO && opt != TELOPT_SGA) option(s->net, WONT, opt);
+}
+
+static int flags(struct sess *s)
+{
+	int fl = 0;
+
+	ioctl(s->sh, TGET, &fl);
+	return fl;
+}
+
+static void echo(struct sess *s, const void *p, int n)
+{
+	if (!(s->fl & TNOECHO)) put(s->net, p, n);
 }
 
 static void erase(struct sess *s, int n)
 {
 	while (n-- > 0 && s->len) {
 		s->len--;
-		put(s->net, "\b \b", 3);
+		echo(s, "\b \b", 3);
 	}
 }
 
@@ -81,10 +97,15 @@ static void key(struct sess *s, int c)
 		return;
 	}
 	s->cr = c == '\r';
+	if (s->fl & TRAW) {
+		put(s->sh, &ch, 1);
+		echo(s, &ch, 1);
+		return;
+	}
 	switch (c) {
 	case '\r':
 	case '\n':
-		put(s->net, "\r\n", 2);
+		echo(s, "\r\n", 2);
 		s->line[s->len++] = '\n';
 		put(s->sh, s->line, s->len);
 		s->len = 0;
@@ -108,13 +129,30 @@ static void key(struct sess *s, int c)
 	}
 	if ((c < ' ' && c != '\t') || s->len >= (int) sizeof s->line - 1) return;
 	s->line[s->len++] = ch;
-	put(s->net, &ch, 1);
+	echo(s, &ch, 1);
+}
+
+/* window size and terminal type, for the shell's environment */
+static void sub(struct sess *s)
+{
+	unsigned char *b = s->sb;
+	int i;
+
+	if (s->sblen >= 5 && b[0] == TELOPT_NAWS) {
+		s->cols = b[1] << 8 | b[2];
+		s->rows = b[3] << 8 | b[4];
+	}
+	if (s->sblen < 3 || b[0] != TELOPT_TTYPE || b[1] != TELQUAL_IS) return;
+	for (i = 0; i < s->sblen - 2 && i < (int) sizeof s->term - 1; i++)
+		s->term[i] = tolower(b[i + 2]);
+	s->term[i] = 0;
 }
 
 static void net_in(struct sess *s, const unsigned char *p, int n)
 {
 	int c;
 
+	s->fl = flags(s);
 	while (n-- > 0) {
 		c = *p++;
 		switch (s->state) {
@@ -125,8 +163,10 @@ static void net_in(struct sess *s, const unsigned char *p, int n)
 		case CMD:
 			s->state = DATA;
 			if (c == IAC) key(s, c);
-			else if (c == SB) s->state = SUB;
-			else if (c >= WILL && c <= DONT) {
+			else if (c == SB) {
+				s->sblen = 0;
+				s->state = SUB;
+			} else if (c >= WILL && c <= DONT) {
 				s->verb = c;
 				s->state = OPT;
 			}
@@ -137,9 +177,12 @@ static void net_in(struct sess *s, const unsigned char *p, int n)
 			break;
 		case SUB:
 			if (c == IAC) s->state = SUBIAC;
+			else if (s->sblen < (int) sizeof s->sb) s->sb[s->sblen++] = c;
 			break;
 		case SUBIAC:
 			s->state = c == SE ? DATA : SUB;
+			if (c == SE) sub(s);
+			else if (c == IAC && s->sblen < (int) sizeof s->sb) s->sb[s->sblen++] = c;
 			break;
 		}
 	}
@@ -148,10 +191,10 @@ static void net_in(struct sess *s, const unsigned char *p, int n)
 static void sh_out(struct sess *s, const unsigned char *p, int n)
 {
 	unsigned char b[1024];
-	int i, k = 0;
+	int i, k = 0, raw = flags(s) & TRAW;
 
 	for (i = 0; i < n; i++) {
-		if (p[i] == '\n') b[k++] = '\r';
+		if (p[i] == '\n' && !raw) b[k++] = '\r';
 		if (p[i] == IAC) b[k++] = IAC;
 		b[k++] = p[i];
 	}
@@ -196,9 +239,39 @@ static void busy(int lsock)
 	close(c);
 }
 
+/* give the client a second to report its terminal before the shell starts */
+static void settle(struct sess *s)
+{
+	unsigned char buf[256];
+	char v[16];
+	struct timeval tv;
+	fd_set r;
+	int n;
+
+	tv.tv_sec = 1;
+	tv.tv_usec = 0;
+	while (!(s->term[0] && s->cols)) {
+		FD_ZERO(&r);
+		FD_SET(s->net, &r);
+		if (select(s->net + 1, &r, 0, 0, &tv) <= 0 || (n = read(s->net, buf, sizeof buf)) <= 0) break;
+		net_in(s, buf, n);
+	}
+	setenv("TERM", s->term[0] ? s->term : "vt220", 1);
+	unsetenv("COLUMNS");
+	unsetenv("LINES");
+	if (s->cols && s->rows) {
+		sprintf(v, "%d", s->cols);
+		setenv("COLUMNS", v, 1);
+		sprintf(v, "%d", s->rows);
+		setenv("LINES", v, 1);
+	}
+}
+
 static void session(int net, int lsock)
 {
-	static const unsigned char hello[] = { IAC, WILL, TELOPT_ECHO, IAC, WILL, TELOPT_SGA };
+	static const unsigned char hello[] = {
+		IAC, WILL, TELOPT_ECHO, IAC, WILL, TELOPT_SGA, IAC, DO, TELOPT_TTYPE, IAC, DO, TELOPT_NAWS
+	};
 	static const char banner[] = "netOS telnetd - exit or ^D to quit\r\n";
 	struct sess s;
 	unsigned char buf[512];
@@ -207,11 +280,13 @@ static void session(int net, int lsock)
 
 	memset(&s, 0, sizeof s);
 	s.net = net;
+	s.sh = -1;
+	put(net, hello, sizeof hello);
+	settle(&s);
 	if ((s.pid = spawn(&s.sh, net, lsock)) < 0) {
 		put(net, "telnetd: can't start shell\r\n", 28);
 		return;
 	}
-	put(net, hello, sizeof hello);
 	put(net, banner, sizeof banner - 1);
 	max = net > s.sh ? net : s.sh;
 	if (lsock > max) max = lsock;

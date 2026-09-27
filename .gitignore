@@ -8,8 +8,12 @@ examples/nettest
 examples/rshd
 examples/telnetd
 examples/aclock
+examples/curses
 examples/hello
 *.o
 *.rel
 *.a
 *.log
+ports/vi/vi
+ports/busybox/busybox
+ports/busybox/apps.cfg

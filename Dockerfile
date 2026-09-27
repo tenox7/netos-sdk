@@ -16,13 +16,26 @@ RUN gcc -O2 -o /opt/i960/bin/mkbout /build/mkbout.c
 
 ENV PATH=/opt/i960/bin:$PATH
 
-# gcc 2.95.3 is the last series with an i960 back end
-COPY build/build-gcc.sh /build/
+# gcc 2.95.3 with its i960 back end
+COPY build/build-gcc.sh build/float.h /build/
 RUN bash /build/build-gcc.sh && rm -rf /tmp/gcc-2.95.3 /tmp/g /tmp/gcc.tgz
 
-# the C library and the compiler driver
+# newlib, the C library, with the netOS headers it needs from libnetos
+COPY build/build-newlib.sh /build/
+COPY libnetos/include /build/libnetos/include
+RUN bash /build/build-newlib.sh /build/libnetos/include && rm -rf /tmp/newlib* /tmp/nl
+
+# libnetos, newlib's system layer, and the compiler driver
 COPY libnetos /build/libnetos
 COPY netos-gcc /opt/i960/bin/netos-gcc
 RUN cd /build/libnetos && sh build.sh /opt/i960 && chmod +x /opt/i960/bin/netos-gcc
+
+# the 2.11BSD termcap library, with the common terminals built in
+COPY libtermcap /build/libtermcap
+RUN cd /build/libtermcap && sh build.sh /opt/i960
+
+# ncurses 5.9, with the common terminals compiled in
+COPY build/build-ncurses.sh /build/
+RUN bash /build/build-ncurses.sh && rm -rf /tmp/ncurses* /tmp/hnc
 
 WORKDIR /w
