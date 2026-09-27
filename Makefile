@@ -1,5 +1,5 @@
 IMAGE   ?= netos-i960
-EXAMPLES = demo heaptest systest floattest floatfmt nettest rshd
+EXAMPLES = demo heaptest systest floattest floatfmt nettest rshd telnetd
 RUN      = docker run --rm --platform linux/386 -v "$(CURDIR):/w" -w /w $(IMAGE)
 
 .PHONY: image examples test clean
@@ -22,5 +22,5 @@ test:
 
 clean:
 	rm -f examples/demo examples/heaptest examples/systest examples/floattest \
-	      examples/floatfmt examples/nettest examples/rshd examples/aclock examples/hello \
+	      examples/floatfmt examples/nettest examples/rshd examples/telnetd examples/aclock examples/hello \
 	      examples/*.o examples/*.rel

@@ -17,5 +17,6 @@ run the name:
 | `aclock` | [aclock](https://github.com/tenox7/aclock), built from unmodified source |
 | `nettest` | TCP/UDP echo server on port 7777, or a client given `host port [text]` |
 | `rshd` | BSD remote-shell daemon on port 514; run `rsh <station> <cmd>` |
+| `telnetd` | telnet server on port 23 running the netOS shell; one session at a time |
 
 Rebuild any of them with `make examples`.

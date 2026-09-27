@@ -6,6 +6,7 @@ examples/floattest
 examples/floatfmt
 examples/nettest
 examples/rshd
+examples/telnetd
 examples/aclock
 examples/hello
 *.o

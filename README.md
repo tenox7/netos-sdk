@@ -47,7 +47,8 @@ BSD sockets work through `sys/socket.h`, `netinet/in.h`, `arpa/inet.h`,
 Process control is `vfork`, `execv`/`execl`, `dup2`, `pipe`, `wait` and
 `kill` (`unistd.h`, `signal.h`, `sys/wait.h`). netOS has no `fork`, only
 `vfork`, so a child may only rearrange fds and `execv`/`_exit`.
-`examples/rshd.c` is a BSD remote-shell daemon built on all of it.
+`examples/rshd.c` is a BSD remote-shell daemon built on all of it, and
+`examples/telnetd.c` a telnet server running the netOS shell over a socketpair.
 
 Floating point goes through libgcc soft float — the i960 core has no FPU, and
 the i960 gcc configuration never built `fp-bit.c`, so the SDK builds it. `%f`
