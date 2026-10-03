@@ -1,6 +1,6 @@
 # Prebuilt images
 
-netOS i960 b.out images, ready to drop into `netOS/bin/i960/` on a boot server.
+`i960/` holds netOS b.out images, ready to copy into `netOS/bin/i960/` on a boot server.
 Add a matching line to `netOS/config/apps.cfg`, `rehash` on the Station, then
 run the name:
 

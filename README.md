@@ -24,7 +24,7 @@ Copy the result into your netOS tree as `netOS/bin/i960/demo`, add a line to
 
     app.demo.path:	///%netOSdir%/netOS/bin/%cpu%/demo
 
-then `rehash` and `demo` at the Station's console. `prebuilt/` has images you
+then `rehash` and `demo` at the Station's console. `bin/i960/` has images you
 can try without building the toolchain.
 
 ## What works
@@ -87,7 +87,7 @@ Run busybox applets as `busybox ls`, or add `ports/busybox/apps.cfg` to
     examples/       sample programs
     ports/          open source software built for netOS
     tools/          the reverse-engineering scripts
-    prebuilt/       ready-to-run images
+    bin/i960/       ready-to-run images
 
 ## Toolchain
 
