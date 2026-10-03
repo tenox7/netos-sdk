@@ -69,5 +69,4 @@ try
 umount
 unsetenv
 version
-vi
 waitforserver

@@ -14,6 +14,6 @@ examples/hello
 *.rel
 *.a
 *.log
-ports/vi/vi
+ports/vi/exvi
 ports/busybox/busybox
 ports/busybox/apps.cfg

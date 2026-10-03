@@ -68,13 +68,12 @@ both carry vt220, vt100, xterm, screen, linux, ansi and dumb built in.
 `ports/` builds open source software from its upstream release plus a small
 patch:
 
-    ./nsdk sh ports/vi/build.sh         traditional vi, ex/vi 3.7
+    ./nsdk sh ports/vi/build.sh         traditional vi, ex/vi 3.7, as exvi
     ./nsdk sh ports/busybox/build.sh    busybox 1.00, the applets in ports/busybox/applets
 
-vi and busybox keep temp files in `/disk1/tmp`, or `$TMPDIR`. Run busybox
-applets as `busybox ls`, or add `ports/busybox/apps.cfg` to `apps.cfg` to call
-them by name (names netOS already has are left out); `busybox hush` and
-`busybox msh` find them either way.
+Run busybox applets as `busybox ls`, or add `ports/busybox/apps.cfg` to
+`apps.cfg` to call them by name (names netOS already has are left out);
+`busybox hush` and `busybox msh` find them either way.
 
 ## Layout
 

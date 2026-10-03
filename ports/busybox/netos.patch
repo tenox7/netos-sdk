@@ -1,6 +1,6 @@
 --- a/applets/busybox.c
 +++ b/applets/busybox.c
-@@ -169,20 +169,56 @@
+@@ -169,21 +169,41 @@
  	/* Flag that we've been here already */
  	been_there_done_that = 1;
  
@@ -15,11 +15,13 @@
 -	memmove(argv, argv + 1, sizeof(char *) * (argc + 1));
 -	for (i = 0; i < argc; i++)
 -		argv[i] -= len;
+-
+-	return (main(argc, argv));
 +	/* Move the command line down a notch; netOS does not keep the argument
 +	   strings contiguous, so shift the pointers only */
 +	return (main(argc, argv + 1));
-+}
-+
+ }
+ 
 +#ifdef __netos__
 +#include <alloca.h>
 +#undef execvp
@@ -48,49 +50,108 @@
 +	execvp(file, argv);
 +	return bb_netos_execve(file, argv, environ);
 +}
-+
-+int bb_netos_tmpfile(void)
-+{
-+	char *dir = getenv("TMPDIR"), tmp[256];
-+	int fd;
- 
--	return (main(argc, argv));
-+	if (!dir) {
-+		dir = "/disk1/tmp";
-+		mkdir(dir, 0777);
-+	}
-+	snprintf(tmp, sizeof tmp, "%s/bbXXXXXX", dir);
-+	if ((fd = mkstemp(tmp)) < 0)
-+		bb_perror_msg_and_die("%s", tmp);
-+	unlink(tmp);
-+	return fd;
- }
 +#endif
- 
++
  /*
  Local Variables:
+ c-file-style: "linux"
+--- a/archival/libunarchive/get_header_tar_bz2.c
++++ b/archival/libunarchive/get_header_tar_bz2.c
+@@ -32,6 +32,9 @@
+ 	archive_handle->src_fd = open_transformer(archive_handle->src_fd, uncompressStream);
+ 	archive_handle->offset = 0;
+ 	while (get_header_tar(archive_handle) == EXIT_SUCCESS);
++#ifdef __netos__
++	close_transformer(archive_handle->src_fd);
++#endif
+ 
+ 	/* Can only do one file at a time */
+ 	return(EXIT_FAILURE);
+--- a/archival/libunarchive/get_header_tar_gz.c
++++ b/archival/libunarchive/get_header_tar_gz.c
+@@ -21,21 +21,28 @@
+ 
+ extern char get_header_tar_gz(archive_handle_t *archive_handle)
+ {
++#ifndef __netos__	/* netOS: the gunzip applet reads the header */
+ 	unsigned char magic[2];
++#endif
+ 
+ 	/* Cant lseek over pipe's */
+ 	archive_handle->seek = seek_by_char;
+ 
++#ifndef __netos__
+ 	archive_xread_all(archive_handle, &magic, 2);
+ 	if ((magic[0] != 0x1f) || (magic[1] != 0x8b)) {
+ 		bb_error_msg_and_die("Invalid gzip magic");
+ 	}
+ 
+ 	check_header_gzip(archive_handle->src_fd);
++#endif
+ 
+ 	archive_handle->src_fd = open_transformer(archive_handle->src_fd, inflate_gunzip);
+ 	archive_handle->offset = 0;
+ 	while (get_header_tar(archive_handle) == EXIT_SUCCESS);
++#ifdef __netos__
++	close_transformer(archive_handle->src_fd);
++#endif
+ 
+ 	/* Can only do one file at a time */
+ 	return(EXIT_FAILURE);
 --- a/archival/libunarchive/open_transformer.c
 +++ b/archival/libunarchive/open_transformer.c
-@@ -20,6 +20,18 @@
+@@ -20,6 +20,50 @@
  #include "libbb.h"
  
  /* transformer(), more than meets the eye */
 +#ifdef __netos__
-+/* netOS has no fork: run the transformer into a temp file, not a pipe */
++#include <sys/wait.h>
++#include "unarchive.h"
++
++/* netOS has no fork: the transformer runs as its applet and feeds a pipe */
 +extern int open_transformer(int src_fd, int (*transformer)(int src_fd, int dst_fd))
 +{
-+	int fd = bb_netos_tmpfile();
++	int fd_pipe[2];
++	int pid;
 +
-+	transformer(src_fd, fd);
++	if (pipe(fd_pipe) != 0) {
++		bb_perror_msg_and_die("Can't create pipe");
++	}
++	pid = vfork();
++	if (pid == 0) {
++		dup2(src_fd, 0);
++		dup2(fd_pipe[1], 1);
++		close(fd_pipe[0]);
++		close(fd_pipe[1]);
++		execlp("busybox", "busybox",
++			transformer == inflate_gunzip ? "gunzip" : "bunzip2", "-c", (char *) 0);
++		_exit(1);
++	}
++	if (pid == -1) {
++		bb_perror_msg_and_die("vfork failed");
++	}
++	close(fd_pipe[1]);
 +	close(src_fd);
-+	lseek(fd, 0, SEEK_SET);
-+	return fd;
++	return(fd_pipe[0]);
++}
++
++/* read what is left and reap the transformer, which reported any error */
++extern void close_transformer(int fd)
++{
++	char buf[512];
++	int status;
++
++	while (read(fd, buf, sizeof(buf)) > 0);
++	close(fd);
++	if (wait(&status) == -1 || status != 0) {
++		exit(EXIT_FAILURE);
++	}
 +}
 +#else
  extern int open_transformer(int src_fd, int (*transformer)(int src_fd, int dst_fd))
  {
  	int fd_pipe[2];
-@@ -49,3 +61,4 @@
+@@ -49,3 +93,4 @@
  
  	return(fd_pipe[0]);
  }
@@ -214,7 +275,7 @@
  #endif
 --- a/include/libbb.h
 +++ b/include/libbb.h
-@@ -484,4 +484,14 @@
+@@ -484,4 +484,12 @@
  #define HASH_MD5	2
  extern int hash_fd(int fd, const size_t size, const uint8_t hash_algo, uint8_t *hashval);
  
@@ -224,11 +285,21 @@
 +extern int bb_netos_execve(const char *file, char *const argv[], char *const envp[]);
 +extern int bb_netos_execvp(const char *file, char *const argv[]);
 +#define execvp(f, a) bb_netos_execvp(f, a)
-+/* an unlinked temp file in $TMPDIR, else /disk1/tmp */
-+extern int bb_netos_tmpfile(void);
 +#endif
 +
  #endif /* __LIBCONFIG_H__ */
+--- a/include/unarchive.h
++++ b/include/unarchive.h
+@@ -102,6 +102,9 @@
+ extern int inflate_gunzip(int in, int out);
+ 
+ extern int open_transformer(int src_fd, int (*transformer)(int src_fd, int dst_fd));
++#ifdef __netos__
++extern void close_transformer(int fd);
++#endif
+ 
+ 
+ #endif
 --- a/libbb/bb_askpass.c
 +++ b/libbb/bb_askpass.c
 @@ -53,7 +53,10 @@
@@ -292,7 +363,29 @@
  	xgethostbyname.c xgethostbyname2.c xreadlink.c xregcomp.c xgetlarg.c \
 --- a/shell/hush.c
 +++ b/shell/hush.c
-@@ -1136,6 +1136,11 @@
+@@ -853,16 +853,19 @@
+ 	return r;
+ }
+ 
++/* p is NULL after a syntax error */
+ static int static_get(struct in_str *i)
+ {
+-	int ch=*i->p++;
++	int ch;
++	if (!i->p) return EOF;
++	ch=*i->p++;
+ 	if (ch=='\0') return EOF;
+ 	return ch;
+ }
+ 
+ static int static_peek(struct in_str *i)
+ {
+-	return *i->p;
++	return i->p ? *i->p : '\0';
+ }
+ 
+ static inline void cmdedit_set_initial_prompt(void)
+@@ -1136,6 +1139,11 @@
  		bb_perror_msg("couldn't exec: %s",child->argv[0]);
  		_exit(1);
  	} else if (child->group) {
@@ -304,7 +397,7 @@
  		debug_printf("runtime nesting to group\n");
  		interactive=0;    /* crucial!!!! */
  		rcode = run_list_real(child->group);
-@@ -1221,6 +1226,7 @@
+@@ -1221,6 +1229,7 @@
  	int attributes;
  	int status;
  	int prognum = 0;
@@ -312,7 +405,7 @@
  	struct pipe *pi;
  	pid_t childpid;
  
-@@ -1231,15 +1237,19 @@
+@@ -1231,15 +1240,19 @@
  
  	while ((childpid = waitpid(-1, &status, attributes)) > 0) {
  		if (fg_pipe) {
@@ -336,7 +429,7 @@
  		}
  
  		for (pi = job_list; pi; pi = pi->next) {
-@@ -1439,7 +1449,7 @@
+@@ -1439,7 +1452,7 @@
  		}
  
  		/* XXX test for failed fork()? */
@@ -345,7 +438,7 @@
  		if (!(child->pid = fork()))
  #else
  		if (!(child->pid = vfork()))
-@@ -1769,7 +1779,10 @@
+@@ -1769,7 +1782,10 @@
  static int glob_needed(const char *s)
  {
  	for (; *s; s++) {
@@ -357,7 +450,7 @@
  		if (strchr("*[?",*s)) return 1;
  	}
  	return 0;
-@@ -1790,7 +1803,7 @@
+@@ -1790,7 +1806,7 @@
  
  static int xglob(o_string *dest, int flags, glob_t *pglob)
  {
@@ -366,7 +459,7 @@
  
   	/* short-circuit for null word */
  	/* we can code this better when the debug_printf's are gone */
-@@ -1805,7 +1818,8 @@
+@@ -1805,7 +1821,8 @@
   	} else if (glob_needed(dest->data)) {
  		gr = glob(dest->data, flags, NULL, pglob);
  		debug_printf("glob returned %d\n",gr);
@@ -376,43 +469,115 @@
  			/* quote removal, or more accurately, backslash removal */
  			gr = globhack(dest->data, flags, pglob);
  			debug_printf("globhack returned %d\n",gr);
-@@ -2255,10 +2269,26 @@
+@@ -2252,6 +2269,99 @@
+ 	return num;
+ }
+ 
++#ifdef __netos__
++/* netOS has no fork: $(...) runs in a new shell, with our variables in its
++   environment.  Copy its text without running anything in it. */
++static int subst_text(o_string *dest, struct in_str *input, int end)
++{
++	int ch, q = 0, depth = 0;
++
++	while ((ch = b_getch(input)) != EOF) {
++		if (q == '\'') {
++			if (ch == '\'') q = 0;
++		} else if (ch == '\\') {
++			b_addchr(dest, ch);
++			if ((ch = b_getch(input)) == EOF) break;
++		} else if (q) {
++			if (ch == '"') q = 0;
++		} else if (ch == '\'' || ch == '"') {
++			q = ch;
++		} else if (ch == end && !depth) {
++			return 0;
++		} else if (end == ')' && ch == '(') {
++			depth++;
++		} else if (end == ')' && ch == ')') {
++			depth--;
++		}
++		b_addchr(dest, ch);
++	}
++	syntax();
++	return 1;
++}
++
++static FILE *subst_run(char *cmd, pid_t *pid)
++{
++	struct variables *v;
++	char **env, **av;
++	int n, m, i, channel[2];
++
++	for (n = 0; environ[n]; n++);
++	for (m = n, v = top_vars; v; v = v->next) m++;
++	env = xmalloc((m + 1) * sizeof(char *));
++	memcpy(env, environ, n * sizeof(char *));
++	for (m = n, v = top_vars; v; v = v->next)
++		if (!v->flg_export) bb_xasprintf(&env[m++], "%s=%s", v->name, v->value);
++	env[m] = NULL;
++	av = xmalloc((global_argc + 5) * sizeof(char *));
++	av[0] = "busybox";
++	av[1] = "hush";
++	av[2] = "-c";
++	av[3] = cmd;
++	memcpy(av + 4, global_argv, global_argc * sizeof(char *));
++	av[global_argc + 4] = NULL;
++	if (pipe(channel) < 0) bb_perror_msg_and_die("pipe");
++	if ((*pid = vfork()) == 0) {
++		close(channel[0]);
++		dup2(channel[1], 1);
++		close(channel[1]);
++		execve("busybox", av, env);
++		_exit(127);
++	}
++	close(channel[1]);
++	for (i = n; i < m; i++) free(env[i]);
++	free(env);
++	free(av);
++	if (*pid < 0) bb_perror_msg_and_die("vfork");
++	return fdopen(channel[0], "r");
++}
++
++static int process_command_subs(o_string *dest, struct p_context *ctx, struct in_str *input, int subst_end)
++{
++	o_string cmd = NULL_O_STRING;
++	struct in_str pipe_str;
++	int retcode;
++	pid_t pid;
++	FILE *p;
++
++	if (subst_text(&cmd, input, subst_end)) {
++		b_free(&cmd);
++		return 1;
++	}
++	p = subst_run(cmd.data ? cmd.data : "", &pid);
++	b_free(&cmd);
++	if (p == NULL) return 1;
++	mark_open(fileno(p));
++	setup_file_in_str(&pipe_str, p);
++	retcode = parse_stream(dest, ctx, &pipe_str, '\0');
++	if (retcode == 1) {
++		while (b_getch(&pipe_str) != EOF) { /* discard */ };
++	}
++	mark_closed(fileno(p));
++	fclose(p);
++	waitpid(pid, NULL, 0);
++	return retcode;
++}
++#else
  FILE *generate_stream_from_list(struct pipe *head)
  {
  	FILE *pf;
-+#ifdef __netos__
-+	/* no fork, and a vforked child may not vfork again: run the list here
-+	   with its output in a temp file */
-+	int fd = bb_netos_tmpfile(), save;
-+
-+	fflush(stdout);
-+	save = dup(1);
-+	dup2(fd, 1);
-+	run_list_real(head);
-+	fflush(stdout);
-+	dup2(save, 1);
-+	close(save);
-+	lseek(fd, 0, SEEK_SET);
-+	pf = fdopen(fd, "r");
-+	return pf;
-+#else
- #if 1
- 	int pid, channel[2];
- 	if (pipe(channel)<0) bb_perror_msg_and_die("pipe");
--#if !defined(__UCLIBC__) || defined(__ARCH_HAS_MMU__)
-+#if (!defined(__UCLIBC__) || defined(__ARCH_HAS_MMU__)) && !defined(__netos__)
- 	pid=fork();
- #else
- 	pid=vfork();
-@@ -2288,6 +2318,7 @@
- 	pf=popen("echo surrogate response","r");
- 	debug_printf("started fake pipe on FILE *%p\n",pf);
- #endif
-+#endif
- 	return pf;
+@@ -2335,6 +2445,7 @@
+ 	/* XXX this process fails to trim a single trailing newline */
+ 	return retcode;
  }
++#endif
  
-@@ -2348,7 +2379,11 @@
+ static int parse_group(o_string *dest, struct p_context *ctx,
+ 	struct in_str *input, int ch)
+@@ -2348,7 +2459,11 @@
  	}
  	initialize_context(&sub);
  	switch(ch) {
@@ -424,7 +589,7 @@
  		case '{': endch='}'; break;
  		default: syntax();   /* really logic error */
  	}
-@@ -2527,7 +2562,7 @@
+@@ -2527,7 +2642,7 @@
  		case '\'':
  			dest->nonnull = 1;
  			while(ch=b_getch(input),ch!=EOF && ch!='\'') {

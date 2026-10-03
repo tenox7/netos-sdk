@@ -1,22 +1,18 @@
-diff -ruN ./ex_data.c ../../b/ex-050325/ex_data.c
---- a/ex_data.c	2004-11-26 17:19:35.000000000 -0800
-+++ b/ex_data.c	2026-09-26 19:51:25.623448440 -0700
-@@ -90,7 +90,10 @@
-  * These initializations are done char by char instead of as strings
-  * to confuse xstr so it will leave them alone.
-  */
--#ifdef	notdef
-+#if	defined(__netos__)
-+char	direct[ONMSZ] =
-+	{'/', 'd', 'i', 's', 'k', '1', '/', 't', 'm', 'p'};
-+#elif	defined(notdef)
- char	direct[ONMSZ] =
- 	{'/', 't', 'm', 'p'}; 
- #else
-diff -ruN ./ex_io.c ../../b/ex-050325/ex_io.c
---- a/ex_io.c	2005-03-12 12:52:11.000000000 -0800
-+++ b/ex_io.c	2026-09-26 19:51:25.628860540 -0700
-@@ -315,7 +315,11 @@
+--- a/ex.h
++++ b/ex.h
+@@ -123,6 +123,9 @@
+ #include <ctype.h>
+ #include <errno.h>
+ #include <signal.h>
++#ifdef	__netos__
++#undef	SIGTSTP		/* netOS has no job control */
++#endif
+ #include <setjmp.h>
+ 
+ #include <stdarg.h>
+--- a/ex_io.c
++++ b/ex_io.c
+@@ -315,7 +315,11 @@ gglob(struct glob *gp)
  	}
  	if (pipe(pvec) < 0)
  		error(catgets(catd, 1, 82, "Can't make pipe to glob"));
@@ -28,10 +24,31 @@ diff -ruN ./ex_io.c ../../b/ex-050325/ex_io.c
  	io = pvec[0];
  	if (pid < 0) {
  		close(pvec[1]);
-diff -ruN ./ex_subr.c ../../b/ex-050325/ex_subr.c
---- a/ex_subr.c	2005-03-04 04:39:22.000000000 -0800
-+++ b/ex_subr.c	2026-09-26 19:51:25.634023807 -0700
-@@ -1017,6 +1017,9 @@
+@@ -845,6 +849,9 @@ getfile(void)
+ 	fp = nextip;
+ 	do {
+ 		if (--ninbuf < 0) {
++#ifdef	__netos__
++			fifeed(io);
++#endif
+ 			ninbuf = read(io, genbuf, bsize) - 1;
+ 			if (ninbuf < 0) {
+ 				if (lp != linebuf) {
+--- a/ex_proto.h
++++ b/ex_proto.h
+@@ -376,6 +376,9 @@ extern void unix0(int);
+ extern struct termios unixex(char *, char *, int, int);
+ extern void unixwt(int, struct termios);
+ extern void filter(register int);
++#ifdef	__netos__
++extern void fifeed(int);
++#endif
+ extern void recover(void);
+ extern void waitfor(void);
+ extern void revocer(void);
+--- a/ex_subr.c
++++ b/ex_subr.c
+@@ -1017,6 +1017,9 @@ preserve(void)
  	tflush();
  #endif
  	synctmp();
@@ -41,85 +58,260 @@ diff -ruN ./ex_subr.c ../../b/ex-050325/ex_subr.c
  	pid = fork();
  	if (pid < 0)
  		return (0);
-diff -ruN ./ex_unix.c ../../b/ex-050325/ex_unix.c
---- a/ex_unix.c	2005-03-12 12:52:11.000000000 -0800
-+++ b/ex_unix.c	2026-09-26 20:31:02.078035809 -0700
-@@ -326,9 +326,25 @@
- 	struct termios f;	/* mjm: was register */
- 	register int lines = lineDOL();
- 	struct stat statb;
+--- a/ex_temp.c
++++ b/ex_temp.c
+@@ -104,6 +104,48 @@ int	havetmp;
+ int	tfile = -1;
+ int	rfile = -1;
+ 
 +#ifdef	__netos__
-+	char tmp[ONMSZ + 16];
++/*
++ * netOS has no temp directory: the temp file and the register file
++ * are arrays of blocks in memory.
++ */
++static struct	mfile {
++	char	**b;
++	int	n;
++} tmem, rmem;
++
++static void
++memio(struct mfile *f, int b, char *buf, int wr)
++{
++	int n;
++
++	if (b >= f->n) {
++		if (!wr) {
++			memset(buf, 0, BUFSIZ);
++			return;
++		}
++		for (n = f->n ? 2 * f->n : 64; n <= b; n *= 2)
++			;
++		if ((f->b = realloc(f->b, n * sizeof *f->b)) == NULL)
++			error(" Out of memory");
++		memset(f->b + f->n, 0, (n - f->n) * sizeof *f->b);
++		f->n = n;
++	}
++	if (f->b[b] == NULL) {
++		if (!wr) {
++			memset(buf, 0, BUFSIZ);
++			return;
++		}
++		if ((f->b[b] = malloc(BUFSIZ)) == NULL)
++			error(" Out of memory");
++	}
++	if (wr)
++		memcpy(f->b[b], buf, BUFSIZ);
++	else
++		memcpy(buf, f->b[b], BUFSIZ);
++}
 +#endif
++
+ void
+ fileinit(void)
+ {
+@@ -128,6 +170,14 @@ fileinit(void)
+ 	iblock = -1;
+ 	iblock2 = -1;
+ 	oblock = -1;
++#ifdef	__netos__
++	for (i = 0; i < tmem.n; i++) {
++		free(tmem.b[i]);
++		tmem.b[i] = NULL;
++	}
++	ichanged = 0;
++	ichang2 = 0;
++#else
+ 	tfname = realloc(tfname, strlen(svalue(DIRECTORY)) + 14);
+ 	CP(tfname, svalue(DIRECTORY));
+ 	if (stat(tfname, &stbuf)) {
+@@ -173,6 +223,7 @@ dumbness:
+ 	}
+ #endif
+ 	havetmp = 1;
++#endif
+ /* 	brk((char *)fendcore); */
+ }
+ 
+@@ -299,6 +350,10 @@ void
+ blkio(bloc b, char *buf, ssize_t (*iofcn)(int, void *, size_t))
+ {
+ 
++#ifdef	__netos__
++	memio(&tmem, b & BLKMSK, buf, iofcn != (ssize_t(*)())read);
++	return;
++#endif
+ #ifdef INCORB
+ 	if (b < INCORB) {
+ 		if (iofcn == (ssize_t(*)())read) {
+@@ -351,6 +406,9 @@ synctmp(void)
+ 	register line *a;
+ 	register bloc *bp, *up;
+ 
++#ifdef	__netos__
++	return;		/* in memory: no crash recovery */
++#endif
+ #ifdef INCORB
+ 	if (stilinc)
+ 		return;
+@@ -473,6 +531,11 @@ regio(short b, ssize_t (*iofcn)(int, void *, size_t))
+ 	register int i, j;
+ 	pid_t mypid = getpid();
+ 
++#ifdef	__netos__
++	memio(&rmem, b & BLKMSK, (char *) rbuf, iofcn == (ssize_t(*)())write);
++	rblock = b;
++	return;
++#endif
+ 	if (rfile == -1) {
+ 		rfname = realloc(rfname, strlen(svalue(DIRECTORY)) + 14);
+ 		CP(rfname, tfname);
+--- a/ex_tune.h
++++ b/ex_tune.h
+@@ -166,7 +166,7 @@
+  *
+  * If not defined, no in-core buffers are used.
+  */
+-#ifdef	VMUNIX
++#if	defined(VMUNIX) && !defined(__netos__)	/* netOS keeps it all in core */
+ #if	(BUFSIZ - 0) <= 16384
+ #define	INCORB		(65536/BUFSIZ)
+ #else	/* Huge-memory systems. */
+--- a/ex_unix.c
++++ b/ex_unix.c
+@@ -84,6 +84,79 @@ static char sccsid[] = "@(#)ex_unix.c	1.16 (gritter) 11/23/04";
+ #include "ex_tty.h"
+ #include "ex_vis.h"
+ #include <sys/wait.h>
++#ifdef	__netos__
++#include <sys/select.h>
++
++/*
++ * netOS has neither fork nor a temp directory: the editor feeds filter
++ * input from memory itself, whenever the filter has no output ready.
++ */
++static char	*fibuf;
++static size_t	filen, fipos;
++static int	fifd = -1;
++
++static void
++fifill(void)
++{
++	char savelb[LBSIZE];
++	size_t n, sz = 0;
++	line *a;
++
++	filen = fipos = 0;
++	if (fixedzero)
++		return;
++	CP(savelb, linebuf);
++	for (a = addr1; a <= addr2; a++) {
++		getline(*a);
++		n = strlen(linebuf) + 1;
++		if (filen + n > sz) {
++			sz = 2 * (filen + n);
++			if ((fibuf = realloc(fibuf, sz)) == NULL)
++				error(" Out of memory");
++		}
++		memcpy(fibuf + filen, linebuf, n);
++		filen += n;
++		fibuf[filen - 1] = '\n';
++	}
++	CP(linebuf, savelb);
++}
++
++/* feed the filter until fd has output to read, or all of it if fd < 0 */
++void
++fifeed(int fd)
++{
++	fd_set r, w;
++	ssize_t k;
++	shand op;
++
++	if (fifd < 0)
++		return;
++	op = signal(SIGPIPE, SIG_IGN);
++	while (fipos < filen) {
++		FD_ZERO(&r);
++		FD_ZERO(&w);
++		if (fd >= 0)
++			FD_SET(fd, &r);
++		FD_SET(fifd, &w);
++		if (select((fd > fifd ? fd : fifd) + 1, &r, &w, NULL, NULL) < 0)
++			break;
++		if (fd >= 0 && FD_ISSET(fd, &r)) {
++			signal(SIGPIPE, op);
++			return;
++		}
++		if (!FD_ISSET(fifd, &w))
++			continue;
++		/* small writes, so a blocking one cannot wait on the reader */
++		if ((k = write(fifd, fibuf + fipos, filen - fipos < 256 ?
++				filen - fipos : 256)) < 0)
++			break;
++		fipos += k;
++	}
++	signal(SIGPIPE, op);
++	close(fifd);
++	fifd = -1;
++}
++#endif
+ 
+ /*
+  * Unix escapes, filtering
+@@ -263,6 +336,10 @@ unixex(char *opt, char *up, int newstdin, int mode)
+ 		}
+ 		if (io)
+ 			close(io);
++#ifdef	__netos__
++		if (fifd >= 0)
++			close(fifd);
++#endif
+ 		if (tfile)
+ 			close(tfile);
+ #ifndef VMUNIX
+@@ -329,6 +406,13 @@ filter(register int mode)
  
  	mode++;
  	if (mode & 2) {
 +#ifdef	__netos__
-+		/* no fork to feed a pipe: stage the lines in a temp file */
-+		signal(SIGINT, SIG_IGN);
-+		snprintf(tmp, sizeof tmp, "%s/ExfXXXXXX", svalue(DIRECTORY));
-+		if ((io = mkstemp(tmp)) < 0)
-+			error("Can't make temp file for filter");
-+		putfile(1);
-+		close(io);
-+		if ((pvec[0] = open(tmp, O_RDONLY)) < 0)
-+			error("Can't reopen temp file for filter");
++		fifill();
++		if (pipe(pvec) < 0)
++			error(catgets(catd, 1, 202, "Can't make pipe"));
++		fifd = pvec[1];
 +		io = pvec[0];
-+		setrupt();
 +#else
  		signal(SIGINT, SIG_IGN);
  		if (pipe(pvec) < 0)
  			error(catgets(catd, 1, 202, "Can't make pipe"));
-@@ -349,6 +365,7 @@
+@@ -349,8 +433,13 @@ filter(register int mode)
  		close(pvec[1]);
  		io = pvec[0];
  		setrupt();
 +#endif
  	}
  	f = unixex("-c", uxb, (mode & 2) ? pvec[0] : 0, mode);
++#ifdef	__netos__
++	if (mode == 2)
++		fifeed(-1);
++#endif
  	if (mode == 3) {
-@@ -375,6 +392,10 @@
+ 		delete(0);
+ 		addr2 = addr1 - 1;
+@@ -374,6 +463,13 @@ filter(register int mode)
+ 	}
  	close(io);
  	io = -1;
- 	unixwt(!inopen, f);
 +#ifdef	__netos__
-+	if (mode & 2)
-+		unlink(tmp);
++	if (fifd >= 0)
++		close(fifd);
++	fifd = -1;
++	free(fibuf);
++	fibuf = NULL;
 +#endif
+ 	unixwt(!inopen, f);
  	netchHAD(lines);
  }
- 
-diff -ruN ./ex.c ../../b/ex-050325/ex.c
---- a/ex.c	2005-03-04 04:44:46.000000000 -0800
-+++ b/ex.c	2026-09-26 21:04:38.519154877 -0700
-@@ -567,6 +567,12 @@
- 		value(PROMPT) = intty;
- 		if ((cp = getenv("SHELL")) != NULL && *cp != '\0')
- 			safecp(shell, cp, sizeof shell, "$SHELL too long");
-+#ifdef	__netos__
-+		if ((cp = getenv("TMPDIR")) != NULL && *cp != '\0')
-+			safecp(direct, cp, sizeof direct, "$TMPDIR too long");
-+		else
-+			mkdir(direct, 01777);
-+#endif
- 		if (fast || !intty)
- 			setterm("dumb");
- 		else {
-diff -ruN ./ex.h ../../b/ex-050325/ex.h
---- a/ex.h	2005-03-04 04:44:46.000000000 -0800
-+++ b/ex.h	2026-09-26 19:51:25.612744238 -0700
-@@ -123,6 +123,9 @@
- #include <ctype.h>
- #include <errno.h>
- #include <signal.h>
-+#ifdef	__netos__
-+#undef	SIGTSTP		/* netOS has no job control */
-+#endif
- #include <setjmp.h>
- 
- #include <stdarg.h>
-diff -ruN ./netos.c ../../b/ex-050325/netos.c
---- a/netos.c	1969-12-31 16:00:00.000000000 -0800
-+++ b/netos.c	2026-09-26 19:51:43.211713941 -0700
+--- /dev/null
++++ b/netos.c
 @@ -0,0 +1 @@
 +char *poolsbrk(long v) { return 0; }

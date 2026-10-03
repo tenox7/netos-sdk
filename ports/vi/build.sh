@@ -1,6 +1,6 @@
 #!/bin/sh
 # vi: the traditional ex/vi 3.7 (Gunnar Ritter's ex-vi 050325) for netOS.
-#   ./nsdk sh ports/vi/build.sh      builds ports/vi/vi
+#   ./nsdk sh ports/vi/build.sh      builds ports/vi/exvi
 set -e
 V=050325
 D=$(cd "$(dirname "$0")" && pwd)
@@ -12,4 +12,4 @@ touch ex_vars.h
 make CC=netos-gcc FEATURES="-DLISPCODE -DCHDIR -DFASTTAG -DUCVISUAL -DBIT8" \
 	REINC= RELIB= RETGT= OSTYPE="-DVMUNIX -DVFORK" MALLOC=netos.o STRIP= \
 	TLIB= TERMLIB=termcap ex
-cp ex $D/vi
+cp ex $D/exvi

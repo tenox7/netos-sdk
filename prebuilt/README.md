@@ -19,7 +19,7 @@ run the name:
 | `rshd` | BSD remote-shell daemon on port 514; run `rsh <station> <cmd>` |
 | `telnetd` | telnet server on port 23 running the netOS shell; one session at a time |
 | `curses` | ncurses: a box, and the keys you press |
-| `vi` | the traditional ex/vi 3.7 |
+| `exvi` | the traditional ex/vi 3.7 |
 | `busybox` | busybox 1.00; `busybox` alone lists its applets |
 
 Rebuild them with `make examples` and `make ports`.

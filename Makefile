@@ -22,4 +22,4 @@ ports: image
 clean:
 	rm -f examples/demo examples/heaptest examples/systest examples/floattest \
 	      examples/floatfmt examples/nettest examples/rshd examples/telnetd examples/aclock examples/curses examples/hello \
-	      examples/*.o examples/*.rel ports/vi/vi ports/busybox/busybox ports/busybox/apps.cfg
+	      examples/*.o examples/*.rel ports/vi/exvi ports/busybox/busybox ports/busybox/apps.cfg
